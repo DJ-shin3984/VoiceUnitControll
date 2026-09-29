@@ -1,0 +1,1559 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>음성 부대 지휘 프로토타입</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  --font:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+  --bg:#E4EAEC; --panel:#F3F6F7; --ink:#15262D; --muted:#56707A; --line:#C7D3D8;
+  --map-bg:#DCE5E8; --map-grid:#C3D1D6; --map-label:#8198A1;
+  --friend:#B8680F; --enemy:#B8322A; --accent:#1C6E80; --beam:#E08A1E;
+  --ok:#2E7D4F; --bad:#B8322A; --ptt:#15262D; --ptt-ink:#F3F6F7; --ptt-live:#B8680F;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0C1A20; --panel:#12252C; --ink:#DCE7EA; --muted:#8AA3AC; --line:#22404A;
+    --map-bg:#0F2229; --map-grid:#1B3A44; --map-label:#4E7482;
+    --friend:#F2B24A; --enemy:#EE6A5C; --accent:#5CC3D6; --beam:#FFD27A;
+    --ok:#6FCF97; --bad:#EE6A5C; --ptt:#DCE7EA; --ptt-ink:#0C1A20; --ptt-live:#F2B24A;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0C1A20; --panel:#12252C; --ink:#DCE7EA; --muted:#8AA3AC; --line:#22404A;
+  --map-bg:#0F2229; --map-grid:#1B3A44; --map-label:#4E7482;
+  --friend:#F2B24A; --enemy:#EE6A5C; --accent:#5CC3D6; --beam:#FFD27A;
+  --ok:#6FCF97; --bad:#EE6A5C; --ptt:#DCE7EA; --ptt-ink:#0C1A20; --ptt-live:#F2B24A;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%}
+body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.5}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 370px;height:100%}
+.stage{position:relative;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;padding:12px}
+canvas{display:block;max-width:100%;touch-action:none;border-radius:6px;cursor:crosshair}
+.hud{position:absolute;left:24px;top:22px;right:24px;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;font-size:13px;color:var(--muted);pointer-events:none}
+.hud b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.hud label,.hud button{pointer-events:auto}
+.hud label{display:flex;gap:6px;align-items:center}
+.panel{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:20px 20px 28px;display:flex;flex-direction:column;gap:20px}
+h1{font-size:19px;margin:0;font-weight:600;letter-spacing:-0.01em}
+.lede{margin:4px 0 0;color:var(--muted);font-size:13.5px}
+h2{font-size:14px;font-weight:600;margin:0 0 8px}
+#ptt{width:100%;border:0;border-radius:10px;padding:18px 16px;font:600 17px/1.3 var(--font);background:var(--ptt);color:var(--ptt-ink);cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none;transition:background .12s}
+#ptt small{display:block;font-weight:400;font-size:12.5px;opacity:.75;margin-top:2px}
+#ptt.live{background:var(--ptt-live);color:#1A1204}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.transcript{min-height:2.6em;margin:12px 0 0;font-size:21px;font-weight:500;line-height:1.3;word-break:keep-all}
+.transcript.idle{color:var(--muted);font-size:15px;font-weight:400}
+.status{margin:6px 0 0;font-size:13px;color:var(--muted)}
+.status.err{color:var(--bad)}
+.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.btn{border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:9px 8px;font:500 13.5px/1.25 var(--font);cursor:pointer;text-align:center}
+.btn small{display:block;color:var(--muted);font-size:11.5px;font-weight:400}
+.btn.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.hint{font-size:12.5px;color:var(--muted);margin:8px 0 0}
+.sel-title{font-weight:600;margin:0}
+.sel-sub{color:var(--muted);font-size:13.5px;margin:2px 0 10px}
+.prog{height:6px;border-radius:3px;background:var(--bg);overflow:hidden;margin:8px 0 2px}
+.prog span{display:block;height:100%;background:var(--friend);width:0}
+.row{display:flex;gap:8px}
+input[type=text]{flex:1;min-width:0;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:8px;padding:9px 11px;font:15px var(--font)}
+.msg{font-size:12.5px;margin:6px 0 0;color:var(--bad);min-height:1em}
+.squads{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.squads li{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.squads .num{font-weight:600;font-variant-numeric:tabular-nums;color:var(--friend);width:1.2em;text-align:center}
+.squads .nm{font-weight:600;background:none;border:0;padding:0;color:var(--ink);font:600 15px var(--font);cursor:pointer;text-align:left}
+.squads .cmp{flex:1;min-width:0;color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.squads .x{border:0;background:none;color:var(--muted);cursor:pointer;font:13px var(--font);padding:2px 4px}
+.parsed{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:14px;margin:0}
+.parsed dt{color:var(--muted)}
+.parsed dd{margin:0;font-weight:500}
+.parsed .sep{grid-column:1/-1;border-top:1px solid var(--line);margin:6px 0}
+.empty{color:var(--muted);font-size:13.5px;margin:0}
+.bar{position:relative;height:14px;border-radius:4px;background:var(--bg);overflow:hidden;margin:4px 0 10px}
+.bar span{position:absolute;top:0;bottom:0}
+.bar .goal{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink);opacity:.5}
+.lat{width:100%;border-collapse:collapse;font-size:13.5px;font-variant-numeric:tabular-nums}
+.lat td{padding:3px 0}
+.lat td:nth-child(2){text-align:right}
+.sw{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+.avg{font-size:13px;color:var(--muted);margin:6px 0 0}
+.log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:13.5px}
+.log li{border-left:3px solid var(--line);padding-left:10px}
+.log li.ok{border-color:var(--ok)}
+.log li.bad{border-color:var(--bad)}
+.log .raw{font-weight:500}
+.log .meta{color:var(--muted);font-size:12.5px}
+.opts{display:flex;flex-direction:column;gap:8px;font-size:13.5px}
+.opts label{display:flex;gap:8px;align-items:center}
+.opts select{font:13.5px var(--font);background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+details{font-size:13.5px}
+summary{cursor:pointer;font-weight:600}
+details p{margin:8px 0 0;color:var(--muted)}
+details ul{margin:6px 0 0;padding-left:18px}
+[hidden]{display:none!important}
+@media (max-width:900px){
+  html,body{height:auto}
+  .app{grid-template-columns:1fr;height:auto}
+  .panel{border-left:0;border-top:1px solid var(--line);overflow:visible}
+  .hud{left:18px;top:16px;font-size:12px;gap:4px 10px}
+}
+@media (prefers-reduced-motion:reduce){#ptt{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <main class="stage" id="stage">
+    <canvas id="map" aria-label="전술 지도"></canvas>
+    <div class="hud" aria-live="polite">
+      <span>격추 <b id="kills">0</b></span>
+      <span>손실 <b id="losses">0</b></span>
+      <span id="waveInfo">첫 침공까지 <b id="waveIn">–</b></span>
+      <label><input type="checkbox" id="optEnemy" checked> 적 침공</label>
+      <button class="btn" id="waveNow" type="button">지금 침공</button>
+      <button class="btn" id="resetBtn" type="button">다시 시작</button>
+    </div>
+  </main>
+
+  <aside class="panel">
+    <header>
+      <h1>음성 부대 지휘</h1>
+      <p class="lede">"병영을 B2에 건설", "병영1에서 해병 10명 생산"처럼 건물도 말로 짓고 유닛을 뽑은 뒤 부대 이름을 붙이세요. 그다음부터는 스페이스를 누른 채 "독수리 저기 공격"처럼 부대 이름으로 명령합니다.</p>
+    </header>
+
+    <section>
+      <button id="ptt" type="button">누르고 말하기<small>스페이스 또는 이 버튼을 누르는 동안 듣습니다</small></button>
+      <p class="transcript idle" id="transcript">부대 이름을 부르며 명령하세요</p>
+      <p class="status" id="voiceStatus"></p>
+    </section>
+
+    <section>
+      <h2>건설</h2>
+      <div class="btns" id="buildBtns"></div>
+      <p class="hint" id="buildHint">버튼을 누른 뒤 지도를 클릭하면 바로 지어집니다. Shift를 누르고 있으면 연속 건설, 우클릭이나 Esc로 취소합니다.</p>
+    </section>
+
+    <section>
+      <h2>선택</h2>
+      <div id="selBox"></div>
+    </section>
+
+    <section>
+      <h2>부대</h2>
+      <ol class="squads" id="squadList"></ol>
+      <p class="empty" id="squadEmpty">아직 지정한 부대가 없습니다. 유닛을 드래그로 선택한 뒤 이름을 붙이세요.</p>
+    </section>
+
+    <section>
+      <h2>마지막 명령 해석</h2>
+      <div id="parsed"><p class="empty">아직 내린 명령이 없습니다.</p></div>
+    </section>
+
+    <section>
+      <h2>반응 속도</h2>
+      <div id="latency"><p class="empty">음성 명령을 내리면 단계별 지연이 표시됩니다.</p></div>
+    </section>
+
+    <section>
+      <h2>명령 기록</h2>
+      <ol class="log" id="log"></ol>
+    </section>
+
+    <section>
+      <label class="h2like" for="cmdInput"><h2>텍스트 명령</h2></label>
+      <div class="row">
+        <input type="text" id="cmdInput" autocomplete="off" placeholder="독수리 알파로 이동">
+        <button class="btn" id="cmdSend" type="button">실행</button>
+      </div>
+      <p class="hint">음성 없이 해석기만 시험할 때 씁니다.</p>
+    </section>
+
+    <section class="opts">
+      <h2>실험 설정</h2>
+      <label>음성 인식 엔진
+        <select id="optEngine">
+          <option value="local">기기 안 (오프라인, 권장)</option>
+          <option value="cloud">Google 서버</option>
+        </select>
+      </label>
+      <p class="hint" id="engineInfo"></p>
+      <button class="btn" id="engineInstall" type="button" hidden>한국어 오프라인 음성 모델 내려받기</button>
+      <label><input type="checkbox" id="optWarm" checked> 말한 뒤 10초간 마이크를 켜 둬 다음 명령의 첫 단어가 잘리지 않게</label>
+      <label><input type="checkbox" id="optFast" checked> 말이 끝나기 전이라도 명령이 완성되면 바로 실행</label>
+      <label><input type="checkbox" id="optFuzzy" checked> 부대 이름·명령어가 비슷하게 들려도 알아듣기</label>
+      <label id="aiRow" hidden><input type="checkbox" id="optAI" checked> 규칙으로 못 알아들은 명령은 AI(Claude)가 해석</label>
+      <label>"저기"의 기준
+        <select id="optCursor">
+          <option value="end">말을 끝낸 순간의 커서</option>
+          <option value="start">말을 시작한 순간의 커서</option>
+        </select>
+      </label>
+    </section>
+
+    <details>
+      <summary>명령 예시와 조작법</summary>
+      <p>누구에게: 부대 이름, 2번·2부대처럼 번호, 해병·전차 같은 유닛 종류, 전군, 선택한 유닛</p>
+      <p>무엇을: 이동, 공격, 진격(가면서 교전), 홀드, 정지, 후퇴, 순찰, 취소</p>
+      <p>어디에: 여기·저기(커서), 알파·브라보·찰리·델타, B3 같은 구역, 사령부·병영 같은 건물, 가까운 적, 약한 적, 거수(큰 적)</p>
+      <ul>
+        <li>독수리 저기 공격</li>
+        <li>독수리하고 망치 찰리로 진격</li>
+        <li>전차 전부 홀드</li>
+        <li>독수리 가까운 적 잡고 망치 사령부로 후퇴</li>
+        <li>전군 후퇴</li>
+        <li>취소</li>
+      </ul>
+      <p>건설: 병영·군수공장·우주공항·사령부를 구역, 지점, 여기, 다른 건물 옆에 짓습니다. 자리를 말하지 않으면 사령부 근처에 짓습니다. 지은 건물은 병영1, 병영2처럼 번호가 붙습니다.</p>
+      <p>생산: 건물 이름을 말하면 그 건물에서, 말하지 않으면 가능한 건물에 나눠서 뽑습니다. 수량은 10, 10명, 다섯 명처럼 말합니다.</p>
+      <ul>
+        <li>병영을 B2에 건설해줘</li>
+        <li>알파에 군수공장 지어</li>
+        <li>사령부 옆에 병영 2개 지어</li>
+        <li>병영1에서 해병 10명 생산</li>
+        <li>해병 5명 의무병 2명 뽑아</li>
+      </ul>
+      <p>부대원이 모두 죽으면 그 부대 이름은 자동으로 지워집니다.</p>
+      <p>마우스: 드래그로 유닛 선택, 우클릭으로 이동·공격. 건물을 선택하고 우클릭하면 집결 지점이 바뀝니다. 숫자키는 해당 번호 부대 선택, Ctrl+숫자는 선택한 유닛을 그 번호 부대로 지정합니다.</p>
+    </details>
+  </aside>
+</div>
+
+<script>
+'use strict';
+/* ================= 데이터 정의 ================= */
+const W = 1600, H = 1000, CELL = 200, COLS = 'ABCDEFGH', ROWS = 5;
+const WAYPOINTS = { '알파':{x:300,y:300}, '브라보':{x:300,y:700}, '찰리':{x:1000,y:300}, '델타':{x:1000,y:700} };
+const BTYPES = {
+  hq:       { name:'사령부',   w:140, h:110, hp:1500, makes:[] },
+  barracks: { name:'병영',     w:110, h:84,  hp:1000, makes:['marine','firebat','medic'] },
+  factory:  { name:'군수공장', w:124, h:90,  hp:1250, makes:['bike','tank'] },
+  starport: { name:'우주공항', w:124, h:90,  hp:1300, makes:['fighter','bomber'] },
+};
+const BUILDABLE = ['barracks','factory','starport','hq'];
+const QMAX = 20;   // 건물 하나의 생산 대기열 한도
+const TYPES = {
+  marine:  { name:'해병',   side:'P', hp:45,  speed:95,  range:120, dmg:6,  cd:0.6, r:7,  shape:'dot',   bt:1.6, bio:true },
+  firebat: { name:'화염병', side:'P', hp:70,  speed:95,  range:45,  dmg:13, cd:0.9, r:8,  shape:'dot2',  bt:2.0, bio:true },
+  medic:   { name:'의무병', side:'P', hp:50,  speed:95,  range:0,   dmg:0,  cd:1,   r:7,  shape:'cross', bt:2.0, bio:true, heal:10 },
+  bike:    { name:'바이크', side:'P', hp:75,  speed:175, range:85,  dmg:10, cd:0.7, r:9,  shape:'tri',   bt:2.0 },
+  tank:    { name:'전차',   side:'P', hp:170, speed:65,  range:230, dmg:28, cd:1.8, r:13, shape:'tank',  bt:3.2 },
+  fighter: { name:'전투기', side:'P', hp:110, speed:165, range:140, dmg:10, cd:0.5, r:10, shape:'jet',   bt:3.0, air:true },
+  bomber:  { name:'폭격기', side:'P', hp:210, speed:80,  range:95,  dmg:32, cd:2.0, r:15, shape:'hull',  bt:4.0, air:true },
+  crawler: { name:'돌격체', side:'E', hp:40,  speed:135, range:22,  dmg:6,  cd:0.5, r:8,  shape:'blob' },
+  spitter: { name:'산성체', side:'E', hp:70,  speed:90,  range:140, dmg:9,  cd:1.1, r:9,  shape:'blob' },
+  brute:   { name:'거수',   side:'E', hp:260, speed:62,  range:32,  dmg:20, cd:1.2, r:17, shape:'blob' },
+};
+const ACTION_LABEL = { move:'이동', attack:'공격', attackmove:'진격 (가며 교전)', hold:'홀드 (제자리 사수)', stop:'정지', retreat:'후퇴', patrol:'순찰', undo:'직전 명령 취소' };
+
+/* ================= 상태 ================= */
+const $ = s => document.querySelector(s);
+const cv = $('#map'), ctx = cv.getContext('2d');
+let units, buildings, squads, nextId, beams, pings, score, wave, waveTimer, undoStack;
+let placing = null, placingKeep = false, drag = null;
+let cursorWorld = { x:800, y:500 };
+let view = { s:1, dpr:1 };
+let latencyHist = [], sample = null, C = {};
+
+/* ================= 유틸 ================= */
+const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+const isB = o => !!o.bt;
+const bRad = b => Math.max(BTYPES[b.bt].w, BTYPES[b.bt].h) * 0.45;
+const effDist = (a,o) => isB(o) ? Math.max(0, dist(a,o) - bRad(o)) : dist(a,o);
+const alive = side => units.filter(u => u.hp > 0 && (!side || u.side === side));
+const byId = id => units.find(u => u.id === id && u.hp > 0) || buildings.find(b => b.id === id && b.hp > 0);
+const cellOf = (x,y) => COLS[Math.max(0,Math.min(7,Math.floor(x/CELL)))] + (Math.max(0,Math.min(4,Math.floor(y/CELL)))+1);
+const cellCenter = id => ({ x: COLS.indexOf(id[0])*CELL + CELL/2, y: (Number(id.slice(1))-1)*CELL + CELL/2 });
+const centroid = us => { let x=0,y=0; us.forEach(u=>{x+=u.x;y+=u.y}); return { x:x/us.length, y:y/us.length }; };
+const ms = v => v == null ? '–' : Math.round(v) + 'ms';
+const squadById = id => squads.find(s => s.id === id);
+const squadUnits = sq => alive('P').filter(u => u.squad === sq.id);
+function composition(us){
+  const c = {}; us.forEach(u => c[TYPES[u.type].name] = (c[TYPES[u.type].name]||0) + 1);
+  return Object.entries(c).map(([k,v]) => `${k} ${v}`).join(', ');
+}
+function homePoint(){ const hq = buildings.find(b => b.bt==='hq'); return hq ? { x:hq.x+BTYPES.hq.w/2+30, y:hq.y } : { x:120, y:500 }; }
+
+function readColors(){
+  const cs = getComputedStyle(document.documentElement);
+  ['map-bg','map-grid','map-label','friend','enemy','accent','beam','ink','muted','bad'].forEach(k => C[k] = cs.getPropertyValue('--'+k).trim());
+  C.font = getComputedStyle(document.body).fontFamily;
+}
+readColors();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readColors);
+new MutationObserver(readColors).observe(document.documentElement, { attributes:true, attributeFilter:['data-theme'] });
+
+/* ================= 생성 ================= */
+function spawnUnit(type, x, y){
+  const t = TYPES[type];
+  const u = { id:nextId++, side:t.side, type, x, y, ang: t.side==='P' ? 0 : Math.PI, hp:t.hp, maxHp:t.hp,
+              squad:null, order:{kind:'idle'}, cd:Math.random()*t.cd, flash:0, sel:false, pending:false, think:0 };
+  units.push(u); return u;
+}
+function canPlace(bt, x, y){
+  const d = BTYPES[bt];
+  if (x - d.w/2 < 8 || x + d.w/2 > W-8 || y - d.h/2 < 8 || y + d.h/2 > H-8) return false;
+  return !buildings.some(b => { const e = BTYPES[b.bt];
+    return Math.abs(b.x - x) < (e.w + d.w)/2 + 12 && Math.abs(b.y - y) < (e.h + d.h)/2 + 12; });
+}
+function placeBuilding(bt, x, y){
+  const d = BTYPES[bt];
+  let num = 1; while (buildings.some(b => b.bt===bt && b.num===num)) num++;   // 병영1, 병영2… 부서진 번호는 다시 쓴다
+  const b = { id:nextId++, side:'P', bt, num, name:d.name+num, x, y, hp:d.hp, maxHp:d.hp, queue:[], prog:0, sel:false,
+              rally:{ x: Math.min(W-20, x + d.w/2 + 60), y } };
+  buildings.push(b); return b;
+}
+function reset(){
+  units = []; buildings = []; squads = []; nextId = 1; beams = []; pings = []; undoStack = [];
+  score = { kills:0, losses:0 }; wave = 0; waveTimer = 60; placing = null;
+  placeBuilding('hq', 130, 500);
+  updateHud(); refreshBuildBtns(); selChanged();
+}
+function spawnWave(){
+  wave++;
+  if (alive('E').length > 30) return;
+  const y = 150 + Math.random()*700;
+  const add = (type, n) => { for (let i=0;i<n;i++) spawnUnit(type, 1570 - (i%4)*26, y + (Math.random()-.5)*160); };
+  add('crawler', 3 + wave);
+  add('spitter', 1 + Math.floor(wave/2));
+  if (wave % 2 === 0) add('brute', Math.floor(wave/2));
+  pings.push({ x:1560, y, life:1.2, max:1.2, kind:'attack' });
+}
+function updateHud(){
+  $('#kills').textContent = score.kills; $('#losses').textContent = score.losses;
+  const on = $('#optEnemy').checked;
+  $('#waveInfo').firstChild.textContent = wave ? `침공 ${wave}차, 다음까지 ` : '첫 침공까지 ';
+  $('#waveIn').textContent = on ? Math.ceil(waveTimer) + '초' : '꺼짐';
+}
+
+/* ================= 시뮬레이션 ================= */
+function nearestFoe(u, radius){
+  let best = null, bd = radius;
+  for (const o of units){ if (o.hp<=0 || o.side===u.side) continue; const d = dist(u,o); if (d < bd){ bd=d; best=o; } }
+  if (u.side === 'E') for (const b of buildings){ const d = effDist(u,b); if (d < bd){ bd=d; best=b; } }
+  return best;
+}
+function moveToward(u, g, step){
+  const dx=g.x-u.x, dy=g.y-u.y, d=Math.hypot(dx,dy); if (d<0.5) return;
+  const k = Math.min(1, step/d); u.x += dx*k; u.y += dy*k; u.ang = Math.atan2(dy,dx);
+}
+function shoot(u, t){
+  u.ang = Math.atan2(t.y-u.y, t.x-u.x);
+  t.hp -= TYPES[u.type].dmg;
+  beams.push({ x1:u.x, y1:u.y, x2:t.x, y2:t.y, life:0.12, side:u.side, heavy:['tank','bomber','brute'].includes(u.type), flame:u.type==='firebat' });
+}
+function enemyThink(u, dt){
+  u.think -= dt; if (u.think > 0) return;
+  u.think = 1.0 + Math.random();
+  const p = nearestFoe(u, 700);
+  if (p) u.order = { kind:'attackmove', x:p.x, y:p.y };
+  else { const hq = buildings[0]; u.order = hq ? { kind:'attackmove', x:hq.x, y:hq.y } : { kind:'attackmove', x:200, y:500 }; }
+}
+function arrive(u, o){
+  if (o.kind==='patrol') u.order = { kind:'patrol', x:o.bx, y:o.by, bx:o.x, by:o.y };
+  else u.order = { kind:'idle' };
+}
+function updateMedic(u, t, dt){
+  const o = u.order; let goal = null;
+  if (['move','retreat','attackmove','patrol'].includes(o.kind)){ goal = o; if (dist(u,o) < 8){ arrive(u,o); goal = null; } }
+  else if (o.kind==='attack'){ const tg = byId(o.targetId); if (!tg) u.order = {kind:'idle'}; else if (dist(u,tg) > 150) goal = tg; }
+  let pat = null, pr = 2;
+  for (const a of units){ if (a.hp<=0 || a.side!=='P' || a===u || !TYPES[a.type].bio || a.hp>=a.maxHp) continue;
+    const d = dist(u,a); if (d < 130){ const r = a.hp/a.maxHp; if (r < pr){ pr = r; pat = a; } } }
+  if (pat){
+    if (dist(u,pat) > 40 && !goal && o.kind!=='hold') goal = pat;
+    if (dist(u,pat) <= 48){ pat.hp = Math.min(pat.maxHp, pat.hp + t.heal*dt); if (Math.random() < 0.15) beams.push({ x1:u.x,y1:u.y,x2:pat.x,y2:pat.y,life:0.1,side:'H' }); }
+  }
+  if (goal) moveToward(u, goal, t.speed*dt);
+}
+function update(dt){
+  // 생산
+  for (const b of buildings){
+    if (!b.queue.length) continue;
+    b.prog += dt;
+    const type = b.queue[0];
+    if (b.prog >= TYPES[type].bt){
+      b.prog = 0; b.queue.shift();
+      const d = BTYPES[b.bt];
+      const u = spawnUnit(type, b.x + d.w/2 + 12, b.y + (Math.random()-.5)*d.h*0.6);
+      const off = (Math.random()-.5)*50;
+      u.order = { kind:'move', x:b.rally.x + off*0.6, y:b.rally.y + off };
+    }
+  }
+  // 유닛
+  for (const u of units){
+    if (u.hp <= 0) continue;
+    const t = TYPES[u.type];
+    u.cd -= dt; u.flash = Math.max(0, u.flash - dt);
+    if (u.side === 'E') enemyThink(u, dt);
+    if (t.heal){ updateMedic(u, t, dt); continue; }
+    const o = u.order; let goal = null, target = null;
+    switch (o.kind){
+      case 'move': case 'retreat':
+        goal = o; if (dist(u,o) < 6){ arrive(u,o); goal = null; } break;
+      case 'attack':
+        target = byId(o.targetId);
+        if (!target){ u.order = {kind:'idle'}; break; }
+        if (effDist(u,target) > t.range*0.92) goal = target; break;
+      case 'attackmove': case 'patrol':
+        target = nearestFoe(u, t.range + 170);
+        if (target){ if (effDist(u,target) > t.range*0.92) goal = target; }
+        else { goal = o; if (dist(u,o) < 8){ arrive(u,o); goal = null; } }
+        break;
+      case 'hold':
+        target = nearestFoe(u, t.range); break;
+      default:
+        target = nearestFoe(u, t.range + 90);
+        if (target && effDist(u,target) > t.range*0.92) goal = target;
+    }
+    if (goal) moveToward(u, goal, t.speed*dt);
+    if (target && effDist(u,target) <= t.range && u.cd <= 0){ shoot(u, target); u.cd = t.cd; }
+  }
+  // 겹침 방지 (지상끼리, 공중끼리) + 건물 밖으로 밀어내기
+  const live = alive();
+  for (let i=0;i<live.length;i++) for (let j=i+1;j<live.length;j++){
+    const a=live[i], b=live[j]; if (!!TYPES[a.type].air !== !!TYPES[b.type].air) continue;
+    const min = TYPES[a.type].r + TYPES[b.type].r + 3;
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||0.01;
+    if (d < min){ const push=(min-d)/2, nx=dx/d, ny=dy/d; a.x-=nx*push; a.y-=ny*push; b.x+=nx*push; b.y+=ny*push; }
+  }
+  for (const u of live){
+    if (!TYPES[u.type].air) for (const b of buildings){
+      const d = BTYPES[b.bt], r = TYPES[u.type].r, hx = d.w/2 + r, hy = d.h/2 + r;
+      const dx = u.x - b.x, dy = u.y - b.y;
+      if (Math.abs(dx) < hx && Math.abs(dy) < hy){
+        const px = hx - Math.abs(dx), py = hy - Math.abs(dy);
+        if (px < py) u.x += Math.sign(dx||1)*px; else u.y += Math.sign(dy||1)*py;
+      }
+    }
+    u.x = Math.max(8, Math.min(W-8, u.x)); u.y = Math.max(8, Math.min(H-8, u.y));
+  }
+  // 사망·파괴
+  let changed = false;
+  units = units.filter(u => { if (u.hp > 0) return true; if (u.side==='E') score.kills++; else score.losses++; changed = true;
+    pings.push({ x:u.x, y:u.y, life:0.6, max:0.6, kind:'boom', side:u.side }); return false; });
+  const nb = buildings.length;
+  buildings = buildings.filter(b => { if (b.hp > 0) return true; pings.push({ x:b.x, y:b.y, life:1, max:1, kind:'boom', side:'P' }); return false; });
+  if (changed) pruneSquads(true);
+  if (changed || nb !== buildings.length) selChanged();
+  beams.forEach(b => b.life -= dt); beams = beams.filter(b => b.life > 0);
+  pings.forEach(p => p.life -= dt); pings = pings.filter(p => p.life > 0);
+  if ($('#optEnemy').checked){ waveTimer -= dt; if (waveTimer <= 0){ waveTimer = 35; spawnWave(); } }
+}
+
+/* ================= 렌더링 ================= */
+function resize(){
+  const st = $('#stage'), pad = 24;
+  const aw = st.clientWidth - pad, ah = window.innerWidth <= 900 ? aw*H/W : st.clientHeight - pad - 40;
+  const s = Math.max(0.1, Math.min(aw/W, ah/H)), dpr = window.devicePixelRatio || 1;
+  const cssW = Math.floor(W*s), cssH = Math.floor(H*s);
+  cv.style.width = cssW+'px'; cv.style.height = cssH+'px'; cv.style.marginTop = window.innerWidth <= 900 ? '48px' : '36px';
+  cv.width = Math.floor(cssW*dpr); cv.height = Math.floor(cssH*dpr);
+  view = { s, dpr };
+}
+new ResizeObserver(resize).observe($('#stage'));
+
+function shapePath(shape, r){
+  ctx.beginPath();
+  switch (shape){
+    case 'tri': ctx.moveTo(r*1.3,0); ctx.lineTo(-r,r*0.9); ctx.lineTo(-r*0.5,0); ctx.lineTo(-r,-r*0.9); ctx.closePath(); break;
+    case 'jet': ctx.moveTo(r*1.5,0); ctx.lineTo(-r*0.6,r*1.1); ctx.lineTo(-r*0.2,0); ctx.lineTo(-r*0.6,-r*1.1); ctx.closePath(); break;
+    case 'hull': ctx.moveTo(r*1.3,0); ctx.lineTo(r*0.5,r*0.75); ctx.lineTo(-r*1.1,r*0.75); ctx.lineTo(-r*1.1,-r*0.75); ctx.lineTo(r*0.5,-r*0.75); ctx.closePath(); break;
+    case 'tank': ctx.rect(-r, -r*0.75, r*2, r*1.5); break;
+    case 'blob': for (let i=0;i<10;i++){ const a=i/10*Math.PI*2, rr = i%2 ? r*0.78 : r*1.1; i ? ctx.lineTo(Math.cos(a)*rr, Math.sin(a)*rr) : ctx.moveTo(rr,0); } ctx.closePath(); break;
+    default: ctx.arc(0,0,r,0,Math.PI*2);
+  }
+}
+function drawBuilding(b, px, ghost, valid){
+  const d = BTYPES[b.bt], x = b.x - d.w/2, y = b.y - d.h/2;
+  ctx.globalAlpha = ghost ? 0.55 : 1;
+  ctx.fillStyle = ghost ? (valid ? C.accent : C.bad) : C.friend;
+  ctx.globalAlpha = ghost ? 0.18 : 0.16; ctx.fillRect(x,y,d.w,d.h); ctx.globalAlpha = ghost ? 0.8 : 1;
+  ctx.strokeStyle = ghost ? (valid ? C.accent : C.bad) : (b.sel ? C.ink : C.friend);
+  ctx.lineWidth = (b.sel ? 3 : 1.8)*px; ctx.strokeRect(x,y,d.w,d.h);
+  ctx.fillStyle = ghost ? (valid ? C.accent : C.bad) : C.ink;
+  ctx.font = `600 ${14*px}px ${C.font}`;
+  const label = b.name || d.name, tw = ctx.measureText(label).width; ctx.fillText(label, b.x - tw/2, b.y + 5*px);
+  ctx.globalAlpha = 1;
+  if (ghost) return;
+  if (b.queue.length){
+    const t = TYPES[b.queue[0]], k = Math.min(1, b.prog / t.bt);
+    ctx.fillStyle = C['map-grid']; ctx.fillRect(x+8, y+d.h-12, d.w-16, 4);
+    ctx.fillStyle = C.friend; ctx.fillRect(x+8, y+d.h-12, (d.w-16)*k, 4);
+    ctx.font = `500 ${11*px}px ${C.font}`; ctx.fillStyle = C.muted;
+    ctx.fillText(`${t.name} ${b.queue.length}`, x+8, y+d.h-18);
+  }
+  if (b.hp < b.maxHp){ ctx.fillStyle = C['map-grid']; ctx.fillRect(x, y-8, d.w, 4); ctx.fillStyle = C.friend; ctx.fillRect(x, y-8, d.w*b.hp/b.maxHp, 4); }
+  if (b.sel){
+    ctx.strokeStyle = C.accent; ctx.lineWidth = px; ctx.setLineDash([5*px,4*px]);
+    ctx.beginPath(); ctx.moveTo(b.x + d.w/2, b.y); ctx.lineTo(b.rally.x, b.rally.y); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(b.rally.x, b.rally.y, 6, 0, Math.PI*2); ctx.stroke();
+  }
+}
+function draw(now){
+  const { s, dpr } = view, px = 1/s;
+  ctx.setTransform(dpr*s,0,0,dpr*s,0,0);
+  ctx.fillStyle = C['map-bg']; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = C['map-grid']; ctx.lineWidth = px;
+  for (let x=CELL;x<W;x+=CELL){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y=CELL;y<H;y+=CELL){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+  ctx.fillStyle = C['map-label']; ctx.font = `500 ${13*px}px ${C.font}`;
+  for (let c=0;c<8;c++) for (let r=0;r<ROWS;r++) ctx.fillText(COLS[c]+(r+1), c*CELL+8, r*CELL+18);
+  ctx.font = `600 ${14*px}px ${C.font}`;
+  for (const [name,p] of Object.entries(WAYPOINTS)){
+    ctx.strokeStyle = C.accent; ctx.lineWidth = 1.5*px; ctx.setLineDash([4*px,4*px]);
+    ctx.beginPath(); ctx.arc(p.x,p.y,28,0,Math.PI*2); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.accent; ctx.fillText(name, p.x - ctx.measureText(name).width/2, p.y+5);
+  }
+  for (const b of buildings) drawBuilding(b, px);
+  // 선택 유닛 명령선
+  for (const u of alive('P')){
+    if (!u.sel) continue; const o = u.order; let g = null;
+    if (o.kind==='attack') g = byId(o.targetId); else if (o.x != null) g = o;
+    if (!g) continue;
+    ctx.strokeStyle = (o.kind==='attack'||o.kind==='attackmove') ? C.enemy : C.accent;
+    ctx.globalAlpha = 0.45; ctx.lineWidth = px; ctx.setLineDash([5*px,5*px]);
+    ctx.beginPath(); ctx.moveTo(u.x,u.y); ctx.lineTo(g.x,g.y); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+  for (const p of pings){
+    const k = 1 - p.life/p.max;
+    if (p.kind==='cell'){
+      const c = cellCenter(p.cell);
+      ctx.globalAlpha = 0.22*(1-k); ctx.fillStyle = C.accent; ctx.fillRect(c.x-CELL/2, c.y-CELL/2, CELL, CELL);
+      ctx.globalAlpha = 1-k; ctx.fillStyle = C.accent; ctx.font = `600 ${40*px}px ${C.font}`;
+      ctx.fillText(p.cell, c.x - ctx.measureText(p.cell).width/2, c.y + 14*px); ctx.globalAlpha = 1; continue;
+    }
+    ctx.globalAlpha = 1-k;
+    ctx.strokeStyle = p.kind==='boom' ? (p.side==='E'?C.enemy:C.friend) : p.kind==='attack' ? C.enemy : C.accent;
+    ctx.lineWidth = 2*px; ctx.beginPath(); ctx.arc(p.x,p.y,(p.kind==='boom'?8:14)+k*30,0,Math.PI*2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  const pulse = 0.5 + 0.5*Math.sin(now/120);
+  const order = alive().sort((a,b) => (TYPES[a.type].air?1:0) - (TYPES[b.type].air?1:0));
+  ctx.font = `600 ${10.5*px}px ${C.font}`;
+  for (const u of order){
+    const t = TYPES[u.type], col = u.side==='P' ? C.friend : C.enemy;
+    if (u.pending){ ctx.strokeStyle=C.accent; ctx.globalAlpha=0.4+0.6*pulse; ctx.lineWidth=2*px;
+      ctx.beginPath(); ctx.arc(u.x,u.y,t.r+8,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
+    if (u.flash>0){ ctx.strokeStyle=C.ink; ctx.globalAlpha=u.flash/0.6; ctx.lineWidth=2*px;
+      ctx.beginPath(); ctx.arc(u.x,u.y,t.r+4+(0.6-u.flash)*22,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1; }
+    if (u.sel){ ctx.strokeStyle=C.ink; ctx.lineWidth=1.5*px; ctx.beginPath(); ctx.arc(u.x,u.y,t.r+4,0,Math.PI*2); ctx.stroke(); }
+    if (t.air){ ctx.fillStyle = C.ink; ctx.globalAlpha = 0.12; ctx.beginPath(); ctx.ellipse(u.x+6,u.y+10,t.r,t.r*0.5,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha = 1; }
+    ctx.save(); ctx.translate(u.x,u.y); ctx.rotate(t.shape==='dot'||t.shape==='dot2'||t.shape==='cross'||t.shape==='blob' ? 0 : u.ang);
+    shapePath(t.shape, t.r); ctx.fillStyle = col; ctx.fill();
+    if (t.shape==='dot2'){ ctx.strokeStyle = col; ctx.lineWidth = 1.5*px; ctx.beginPath(); ctx.arc(0,0,t.r+3,0,Math.PI*2); ctx.stroke(); }
+    if (t.shape==='cross'){ ctx.strokeStyle = C['map-bg']; ctx.lineWidth = 2*px; ctx.beginPath(); ctx.moveTo(-4,0); ctx.lineTo(4,0); ctx.moveTo(0,-4); ctx.lineTo(0,4); ctx.stroke(); }
+    if (t.shape==='tank'){ ctx.rotate(0); ctx.strokeStyle = col; ctx.lineWidth = 3.5*px; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(t.r*1.8,0); ctx.stroke(); }
+    ctx.restore();
+    if (u.order.kind==='hold'){ ctx.strokeStyle=col; ctx.lineWidth=px; ctx.strokeRect(u.x-t.r-3,u.y-t.r-3,(t.r+3)*2,(t.r+3)*2); }
+    if (u.hp < u.maxHp || u.sel){
+      const w = t.r*2+6; ctx.fillStyle = C['map-grid']; ctx.fillRect(u.x-w/2, u.y-t.r-10, w, 3);
+      ctx.fillStyle = col; ctx.fillRect(u.x-w/2, u.y-t.r-10, w*Math.max(0,u.hp/u.maxHp), 3);
+    }
+    if (u.side==='P' && u.squad){ const sq = squadById(u.squad); if (sq){ ctx.fillStyle = C.ink; ctx.fillText(String(sq.num), u.x+t.r+2, u.y+t.r+5); } }
+  }
+  for (const b of beams){
+    ctx.strokeStyle = b.side==='P' ? (b.flame ? C.friend : C.beam) : b.side==='H' ? C.accent : C.enemy;
+    ctx.globalAlpha = b.life/0.12; ctx.lineWidth = (b.heavy?2.5:b.flame?4:1.2)*px;
+    ctx.beginPath(); ctx.moveTo(b.x1,b.y1); ctx.lineTo(b.x2,b.y2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  if (placing){
+    const v = canPlace(placing, cursorWorld.x, cursorWorld.y);
+    drawBuilding({ bt:placing, x:cursorWorld.x, y:cursorWorld.y }, px, true, v);
+  } else {
+    ctx.strokeStyle = C.accent; ctx.lineWidth = 1.2*px; const cx=cursorWorld.x, cy=cursorWorld.y;
+    ctx.beginPath(); ctx.moveTo(cx-14,cy); ctx.lineTo(cx-5,cy); ctx.moveTo(cx+5,cy); ctx.lineTo(cx+14,cy);
+    ctx.moveTo(cx,cy-14); ctx.lineTo(cx,cy-5); ctx.moveTo(cx,cy+5); ctx.lineTo(cx,cy+14); ctx.stroke();
+  }
+  if (drag && drag.moved){ ctx.strokeStyle=C.ink; ctx.lineWidth=px; ctx.setLineDash([4*px,3*px]);
+    ctx.strokeRect(Math.min(drag.x0,drag.x1),Math.min(drag.y0,drag.y1),Math.abs(drag.x1-drag.x0),Math.abs(drag.y1-drag.y0)); ctx.setLineDash([]); }
+}
+let last = performance.now(), hudT = 0;
+function loop(now){
+  const dt = Math.min(0.05, (now-last)/1000); last = now;
+  update(dt); draw(now);
+  hudT += dt; if (hudT > 0.25){ hudT = 0; updateHud(); tickPanels(); }
+  requestAnimationFrame(loop);
+}
+
+/* ================= 부대 이름 매칭 (정확 + 발음 유사) ================= */
+/* 음성 인식이 자주 헷갈리는 소리는 같게(또는 가깝게) 본다.
+   모음: ㅔ→ㅐ, ㅖ→ㅒ, ㅙ·ㅞ→ㅚ / 받침: 7가지 대표음으로 / 초성: 예사·된·거센소리(ㄱㄲㅋ 등)는 한 묶음으로 보고 바꿔 들어도 0.4만 깎는다 */
+const V_NORM = { 5:1, 7:3, 10:11, 15:11 };
+const J_NORM = [0,1,1,1,4,4,4,7,8,1,16,8,8,8,17,8,16,17,17,7,7,21,7,7,1,7,17,7];
+const C_FAM = 'ggnddrmbbssojjjgdbh';
+function jamo(s){
+  const out = [];
+  for (const ch of s){
+    const c = ch.charCodeAt(0);
+    if (c >= 0xAC00 && c <= 0xD7A3){
+      const i = c - 0xAC00, cho = Math.floor(i/588), v = Math.floor((i%588)/28), j = J_NORM[i%28];
+      out.push('c'+cho+C_FAM[cho], 'v'+(V_NORM[v] ?? v)); if (j) out.push('j'+j);
+    }
+    else if (/\S/.test(ch)) out.push(ch.toLowerCase());
+  }
+  return out;
+}
+const subCost = (x,y) => x===y ? 0 : (x.length > 2 && y.length > 2 && x[0]==='c' && y[0]==='c' && x.at(-1)===y.at(-1)) ? 0.4 : 1;
+function lev(a, b){
+  const d = Array.from({length:a.length+1}, (_,i) => [i]);
+  for (let j=1;j<=b.length;j++) d[0][j] = j;
+  for (let i=1;i<=a.length;i++) for (let j=1;j<=b.length;j++)
+    d[i][j] = Math.min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1] + subCost(a[i-1], b[j-1]));
+  return d[a.length][b.length];
+}
+function similarity(a, b){ const A = jamo(a), B = jamo(b); if (!A.length || !B.length) return 0; return 1 - lev(A,B)/Math.max(A.length,B.length); }
+const PARTICLE = /(은|는|이|가|을|를|에게|한테|아|야|들|도|랑|하고|와|과|이랑|부대|팀)$/;
+const nospace = s => s.replace(/\s+/g,'');
+
+/* ================= 명령 해석기 (규칙 기반, 빠른 경로) ================= */
+const NUM = {'1':1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'일':1,'하나':1,'한':1,'원':1,'이':2,'둘':2,'두':2,'투':2,'삼':3,'셋':3,'세':3,'쓰리':3,'사':4,'넷':4,'네':4,'오':5,'다섯':5,'육':6,'여섯':6,'칠':7,'일곱':7,'팔':8,'여덟':8,'구':9,'아홉':9};
+const GROUP_RE = /(\d|하나|쓰리|다섯|여섯|일곱|여덟|아홉|일|한|원|이|둘|두|투|삼|셋|세|사|넷|네|오|육|칠|팔|구)\s*번?\s*(?:부대|분대|편대|그룹|팀)/g;
+const BAN_TAIL = '(?:아|야|은|는|이|가|에|에게|한테|하|하고|랑|이랑|와|과|도)?(?=\\s|$)';
+const NUMBAN_HEAD = new RegExp('^(일|이|삼|사|오|육|칠|팔|구)\\s*번' + BAN_TAIL);
+const NUMBAN_DIGIT = new RegExp('(?:^|\\s)([1-9])\\s*번' + BAN_TAIL);
+const TYPE_RES = { marine:/해병|마린/, firebat:/화염병|화염방사병|파이어뱃/, medic:/의무병|메딕/, bike:/바이크|벌처/, tank:/전차|탱크/, fighter:/전투기/, bomber:/폭격기/ };
+const ALL_RE = /전군|전체|전원|모두|전부|다들|모든\s*(?:유닛|병력)|다\s*같이/;
+const SEL_RE = /선택(?:된|한)?|얘네|얘들|이놈들|걔네|쟤네|쟤들|이\s*애들/;
+const ACTION_RES = [
+  ['undo',       /취소|되돌려|원래대로/],
+  ['stop',       /정지|멈춰|멈추|스톱|그만|stop/i],
+  ['hold',       /홀드|사수|버텨|자리\s*(?:지켜|잡아)|대기|hold/i],
+  ['retreat',    /후퇴|퇴각|철수|빠져|도망|물러|retreat/i],
+  ['attackmove', /진격|돌격|밀어|쓸어|쳐들어|공격\s*이동|어택\s*땅/],
+  ['attack',     /공격|쳐|때려|잡아|잡고|사격|발사|쏴|어택|집중|포격|attack/i],
+  ['patrol',     /순찰|정찰|patrol/i],
+  ['move',       /이동|움직|가라|가자|가줘|가(?=\s|$)|와라|와(?=\s|$)|오라|집결|모여|뭉쳐|붙어|향해|전진|move/i],
+];
+const CURSOR_RE = /여기|저기|거기|이쪽|저쪽|그쪽|커서/;
+const WP_RE = /(알파|브라보|찰리|델타)/;
+/* 건물 이름: "병영", "병영1", "병영 1", "병영일"처럼 적힌다. 번호가 한글이면 뒤에 조사나 끝이 와야 번호로 본다.
+   "병영이"는 "병영 2"일 수도, 주격 조사일 수도 있어서 병영2가 없으면 번호 없이 부른 것으로 본다(soft) */
+const BLD_MAP = { '군수공장':'factory','우주공항':'starport','사령부':'hq','본진':'hq','기지':'hq','병영':'barracks','배럭스':'barracks','배럭':'barracks',
+  '공장':'factory','팩토리':'factory','공항':'starport','스타포트':'starport' };
+const BNUM_W = '하나|쓰리|원|투|둘|셋|넷|일|이|삼|사|오|육|칠|팔|구';
+const BREF_RE = new RegExp(`(${Object.keys(BLD_MAP).join('|')})(?:\\s*(\\d+)|\\s*(${BNUM_W})(?=$|[^가-힣]|번|에|으로|로|을|를|은|는|의|옆|앞|뒤|근처|쪽))?\\s*(?:번(?![가-힣]))?`, 'g');
+function findBuildingRefs(c){
+  return [...c.matchAll(BREF_RE)].map(m => ({ bt:BLD_MAP[m[1]], word:m[1], index:m.index, len:m[0].length,
+    num: m[2] ? Number(m[2]) : m[3] ? NUM[m[3]] : null, soft: m[3]==='이' }));
+}
+/* 부른 건물 찾기: 번호가 있으면 그 건물 하나, 없으면 같은 종류 전부 */
+function resolveBuildingRef(ref){
+  const bs = buildings.filter(b => b.bt===ref.bt);
+  if (ref.num != null){
+    const one = bs.find(b => b.num===ref.num);
+    if (one) return { list:[one] };
+    if (!ref.soft) return { error:`${BTYPES[ref.bt].name}${ref.num}이(가) 없습니다` };
+  }
+  return bs.length ? { list:bs } : { error:`${BTYPES[ref.bt].name}이(가) 없습니다` };
+}
+
+/* ================= 건설·생산 명령 ================= */
+const PRODUCE_VERB = /생산|뽑|훈련|양성/, BUILD_VERB = /건설|건축|지어|짓|세워|설치|올려/, MAKE_VERB = /만들/;
+const UNIT_WORD_RE = new RegExp(Object.values(TYPE_RES).map(r => r.source).join('|'), 'g');
+const KNUM = { 한:1,하나:1,두:2,둘:2,세:3,셋:3,네:4,넷:4,다섯:5,여섯:6,일곱:7,여덟:8,아홉:9, 일:1,이:2,삼:3,사:4,오:5,육:6,칠:7,팔:8,구:9 };
+function korNum(w){
+  if (/^\d+$/.test(w)) return Number(w);
+  const m = w.match(/^(열|스물|스무|이십|십)(.*)$/);
+  if (m){ const base = { 열:10, 십:10, 스물:20, 스무:20, 이십:20 }[m[1]]; return !m[2] ? base : KNUM[m[2]] ? base + KNUM[m[2]] : null; }
+  return KNUM[w] ?? null;
+}
+// 수량: "10", "10명", "다섯 명", "열 개". 한글 수는 오인이 잦아서 단위(개·명·기·마리·대)가 붙어야 센다
+function countIn(s, units, needUnit){
+  let m = s.match(new RegExp(`^\\s*(?:을|를|은|는|이|가)?\\s*(\\d+)\\s*(${units})${needUnit ? '' : '?'}`));
+  if (m) return Number(m[1]);
+  m = s.match(new RegExp(`^\\s*(?:을|를|은|는)?\\s*([가-힣]{1,3}?)\\s*(?:${units})`));
+  return m ? korNum(m[1]) : null;
+}
+function parseProduceItems(c){
+  const ms = [...c.matchAll(UNIT_WORD_RE)];
+  return ms.map((m, i) => {
+    const type = Object.keys(TYPE_RES).find(k => TYPE_RES[k].test(m[0]));
+    const after = c.slice(m.index + m[0].length, i+1 < ms.length ? ms[i+1].index : undefined);
+    const before = c.slice(i ? ms[i-1].index + ms[i-1][0].length : 0, m.index).match(/(\d+)\s*(?:개|명|기|마리|대)?\s*(?:의)?\s*$/);
+    const n = countIn(after, '개|명|기|마리|대', false) ?? (before ? Number(before[1]) : 1);
+    return { type, count: Math.max(1, Math.min(50, n || 1)) };
+  });
+}
+/* "병영1에서 해병 10명 생산", "병영을 B2에 건설해줘", "사령부 옆에 공장 2개 지어". 해당 없으면 null (부대 명령으로 넘어감) */
+function parseBuildOrProduce(c){
+  const hasUnit = Object.values(TYPE_RES).some(re => re.test(c));
+  const produce = PRODUCE_VERB.test(c) || (MAKE_VERB.test(c) && hasUnit);
+  if (!produce && !BUILD_VERB.test(c) && !MAKE_VERB.test(c)) return null;
+  const refs = findBuildingRefs(c);
+  if (produce) return { action:'produce', subject:null, items:parseProduceItems(c), bref:refs[0] || null, target:{ kind:'none' } };
+  // 건설: 뒤에 "옆·앞·에·로"가 붙은 건물은 지을 위치, 나머지는 지을 종류
+  refs.forEach(r => r.isPlace = /^\s*(?:의\s*)?(?:옆|앞|뒤|근처|쪽|주변|에|으로|로)/.test(c.slice(r.index + r.len)));
+  const typeRef = refs.find(r => !r.isPlace), placeRef = refs.find(r => r.isPlace);
+  let rest = c; refs.forEach(r => rest = rest.replace(c.substr(r.index, r.len), ' '));
+  let target = parseTarget(rest);
+  if ((!target || target.kind==='enemy') && placeRef) target = { kind:'building', bt:placeRef.bt, num:placeRef.num, soft:placeRef.soft };
+  const count = typeRef ? countIn(c.slice(typeRef.index + typeRef.word.length), '개|동|채|곳', true) : null;
+  return { action:'build', subject:null, bt: typeRef ? typeRef.bt : null, count: Math.max(1, Math.min(5, count || 1)), target: target || { kind:'none' } };
+}
+/* 구역(A1~H5) 인식: 음성 인식은 같은 소리를 "A1", "a 1", "에이원", "에이 1", "A원"처럼 제각각 적는다.
+   알파벳 이름과 숫자(한자어·영어 발음)를 모두 받아 표준 표기 "A1"로 맞춘다. */
+const GRID_LETTERS = { A:['에이','애이','a'], B:['비','삐','b'], C:['씨','시','쒸','c'], D:['디','띠','d'],
+  E:['이','e'], F:['에프','애프','에푸','f'], G:['쥐','지','g'], H:['에이치','에이취','에치','에취','h'] };
+const GRID_NUMS = { 1:['1','일','원','완','one'], 2:['2','이','투','two'], 3:['3','삼','쓰리','스리','three'], 4:['4','사','포','four'], 5:['5','오','파이브','five'] };
+const GRID_TAIL = '(?:\\s*(?:구역|칸|지점)|으로|로|에서|에|쪽|까지)?';
+function altOf(map){ const all = []; for (const [k,arr] of Object.entries(map)) arr.forEach(w => all.push([w,k])); all.sort((a,b) => b[0].length - a[0].length);
+  return { re: all.map(x => x[0]).join('|'), look: Object.fromEntries(all.map(([w,k]) => [w.toLowerCase(), k])) }; }
+const GL = altOf(GRID_LETTERS), GN = altOf(GRID_NUMS);
+const GRID_RE = new RegExp('(^|[^가-힣A-Za-z0-9])(' + GL.re + ')\\s*-?\\s*(' + GN.re + ')(' + GRID_TAIL + ')(?=$|[^가-힣A-Za-z0-9])', 'i');
+function findGrid(text){
+  const m = text.match(GRID_RE); if (!m) return null;
+  const L = GL.look[m[2].toLowerCase()], N = GN.look[m[3].toLowerCase()];
+  if (!L || !N) return null;
+  const hasLatin = /[A-Za-z0-9]/.test(m[2] + m[3]);
+  if (!hasLatin && !m[4]){
+    // 순수 한글 표기("지원", "비오" 등 일상어와 겹침)는 뒤에 조사가 붙거나, 뒤가 비었거나, 바로 동작어가 올 때만 구역으로 본다
+    const after = text.slice(m.index + m[0].length).trim();
+    if (after && !ACTION_RES.some(([,re]) => re.test(after.split(' ')[0]))) return null;
+  }
+  return L + N;
+}
+const EN_NEAR = /(?:가장|제일)?\s*(?:가까운|근처|앞에\s*있는)\s*(?:적|놈|녀석|애)/;
+const EN_WEAK = /(?:약한|체력\s*낮은|다\s*죽어\s*가는|빈사)\s*(?:적|놈|녀석|애)?/;
+const EN_BIG = /거수|큰\s*(?:적|놈|녀석)|대형/;
+const EN_ANY = /적|놈들|녀석들/;
+const RESERVED = /^(전군|전체|전원|모두|전부|선택|알파|브라보|찰리|델타|사령부|병영|군수공장|우주공항|기지|본진|해병|화염병|의무병|바이크|전차|전투기|폭격기|적|여기|저기|취소|정지|후퇴|공격|이동|홀드)$/;
+
+function matchSquadsExact(text){
+  const found = []; let rest = text;
+  const flat = nospace(text);
+  for (const sq of [...squads].sort((a,b) => b.name.length - a.name.length)){
+    const n = nospace(sq.name);
+    if (rest.includes(sq.name)){ found.push(sq.id); rest = rest.split(sq.name).join(' '); }
+    else if (n.length >= 2 && flat.includes(n) && !found.includes(sq.id)){
+      found.push(sq.id);
+      const re = new RegExp(n.split('').map(ch => ch.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('\\s*'), 'g');
+      rest = rest.replace(re, ' ');
+    }
+  }
+  return { found, rest };
+}
+function matchSquadsFuzzy(text){
+  if (!squads.length) return null;
+  const toks = text.split(' ').filter(Boolean);
+  const cands = [];
+  toks.forEach((t,i) => { cands.push({ s:t, idx:[i] }); if (i+1 < toks.length) cands.push({ s:t+toks[i+1], idx:[i,i+1] }); });
+  let best = null;
+  for (const c of cands){
+    const variants = [c.s, c.s.replace(PARTICLE,'')].filter(v => v.length >= 2);
+    for (const v of variants){
+      if (ACTION_RES.some(([,re]) => re.test(v)) || CURSOR_RE.test(v) || WP_RE.test(v) || /번/.test(v)) continue;
+      for (const sq of squads){
+        const sc = similarity(v, sq.name);
+        if (sc >= 0.72 && (!best || sc > best.score)) best = { id:sq.id, score:sc, idx:c.idx, heard:c.s };
+      }
+    }
+  }
+  if (!best) return null;
+  const rest = toks.filter((_,i) => !best.idx.includes(i)).join(' ');
+  return { found:[best.id], rest, fuzzy:best };
+}
+function parseSubject(c){
+  // 1) 부대 이름 (정확히)
+  const ex = matchSquadsExact(c);
+  let rest = ex.rest;
+  const ids = [...ex.found];
+  // 2) 번호 부대
+  let m; GROUP_RE.lastIndex = 0;
+  while ((m = GROUP_RE.exec(rest))) { const n = NUM[m[1]]; const sq = squads.find(s => s.num === n); if (sq && !ids.includes(sq.id)) ids.push(sq.id); }
+  rest = rest.replace(GROUP_RE, ' ');
+  // 3) "2번", "이번"처럼 '부대' 없이 번호만 부른 경우
+  //    음성 인식은 "2번"을 흔한 단어 "이번"으로 적는 일이 많아서, 절 맨 앞의 한글 숫자+번도 부대 번호로 본다
+  let changed = true;
+  while (changed){
+    changed = false;
+    const t = rest.trim();
+    let mm = t.match(NUMBAN_HEAD);
+    if (mm){ const n = NUM[mm[1]]; const sq = squads.find(s => s.num === n);
+      if (sq){ if (!ids.includes(sq.id)) ids.push(sq.id); rest = t.slice(mm[0].length); changed = true; continue; } }
+    mm = rest.match(NUMBAN_DIGIT);
+    if (mm){ const sq = squads.find(s => s.num === Number(mm[1]));
+      if (sq){ if (!ids.includes(sq.id)) ids.push(sq.id); rest = rest.replace(mm[0], ' '); changed = true; } }
+  }
+  if (ids.length) return { subject:{ kind:'squad', ids }, rest };
+  const types = Object.keys(TYPE_RES).filter(k => TYPE_RES[k].test(rest));
+  if (types.length){ types.forEach(k => rest = rest.replace(TYPE_RES[k], ' ')); return { subject:{ kind:'type', types }, rest }; }
+  if (ALL_RE.test(rest)) return { subject:{ kind:'all' }, rest: rest.replace(ALL_RE,' ') };
+  if (SEL_RE.test(rest)) return { subject:{ kind:'selection' }, rest: rest.replace(SEL_RE,' ') };
+  if ($('#optFuzzy').checked){ const fz = matchSquadsFuzzy(rest); if (fz) return { subject:{ kind:'squad', ids:fz.found, fuzzy:fz.fuzzy.heard }, rest: fz.rest }; }
+  return { subject:null, rest };
+}
+function parseAction(c){ for (const [k,re] of ACTION_RES) if (re.test(c)) return k; return null; }
+/* 동작어가 정확히 안 맞을 때("고격해", "후테") 발음이 가까운 동작어로 본다. 단어 앞부분을 같은 글자 수만큼 잘라 비교한다 */
+const ACTION_WORDS = [['공격','attack'],['이동','move'],['후퇴','retreat'],['퇴각','retreat'],['철수','retreat'],['정지','stop'],['멈춰','stop'],
+  ['홀드','hold'],['대기','hold'],['진격','attackmove'],['돌격','attackmove'],['순찰','patrol'],['정찰','patrol'],['집결','move'],['취소','undo']];
+function parseActionFuzzy(c){
+  let best = null;
+  for (const t of c.split(' ').filter(Boolean)){
+    for (const [w,k] of ACTION_WORDS){
+      if (t.length < w.length) continue;
+      const sc = similarity(t.slice(0, w.length), w);
+      if (sc >= 0.75 && (!best || sc > best.score)) best = { action:k, score:sc, heard:t };
+    }
+  }
+  return best;
+}
+function parseTarget(c){
+  if (EN_NEAR.test(c)) return { kind:'enemy', pick:'nearest' };
+  if (EN_WEAK.test(c)) return { kind:'enemy', pick:'weakest' };
+  if (EN_BIG.test(c))  return { kind:'enemy', pick:'biggest' };
+  let m;
+  if ((m = c.match(WP_RE))) return { kind:'waypoint', name:m[1] };
+  { const r = findBuildingRefs(c)[0]; if (r) return { kind:'building', bt:r.bt, num:r.num, soft:r.soft, word:r.word }; }
+  { const cell = findGrid(c); if (cell) return { kind:'grid', cell }; }
+  if (CURSOR_RE.test(c)) return { kind:'cursor' };
+  if (EN_ANY.test(c)) return { kind:'enemy', pick:'nearest' };
+  return null;
+}
+function parseText(text){
+  const norm = text.replace(/[.!?。]/g,' ').replace(/\s+/g,' ').trim();
+  const clauses = norm.split(/\s*(?:그리고|그\s*다음에?|,|;)\s*|(?<=[가-힣])고\s+/).map(s=>s.trim()).filter(Boolean);
+  const cmds = [], unparsed = []; let carry = null, pending = [];
+  for (const c of clauses){
+    const bp = parseBuildOrProduce(c);
+    if (bp){ cmds.push(bp); continue; }   // 건설·생산은 부대 명령과 따로 처리
+    let { subject, rest } = parseSubject(c);
+    const action0 = parseAction(rest), target = parseTarget(rest);
+    let action = action0, fuzzyAction;
+    if (!action && $('#optFuzzy').checked){ const fa = parseActionFuzzy(rest); if (fa){ action = fa.action; fuzzyAction = fa.heard; } }
+    if (subject && !action && !target){ pending.push(subject); continue; }  // "독수리하고 망치 공격"의 앞부분
+    if (pending.length){
+      const all = [...pending, subject].filter(Boolean);
+      if (all.every(s => s.kind==='squad')) subject = { kind:'squad', ids:[...new Set(all.flatMap(s=>s.ids))], fuzzy: all.map(s=>s.fuzzy).filter(Boolean).join(', ') || undefined };
+      else if (!subject) subject = pending[pending.length-1];
+      pending = [];
+    }
+    if (!action && target) action = target.kind==='enemy' ? 'attack' : 'move';
+    if (!action){ unparsed.push(c); continue; }
+    if (!subject) subject = carry;
+    carry = subject;
+    cmds.push({ subject, action, target: target || { kind:'none' }, fuzzyAction });
+  }
+  return { cmds, unparsed };
+}
+const sigOf = cmds => JSON.stringify(cmds.map(c => [c.subject && {k:c.subject.kind, i:c.subject.ids, t:c.subject.types}, c.action, c.target]));
+
+/* ================= 명령 실행 ================= */
+function resolveUnits(subject){
+  const mine = alive('P'), sel = mine.filter(u => u.sel);
+  if (!subject || subject.kind==='selection') return sel.length ? sel : [];
+  if (subject.kind==='squad') return mine.filter(u => subject.ids.includes(u.squad));
+  if (subject.kind==='type')  return mine.filter(u => subject.types.includes(u.type));
+  return mine;
+}
+function pickEnemy(pick, from){
+  const es = alive('E'); if (!es.length) return null;
+  if (pick==='weakest') return es.reduce((a,b) => a.hp/a.maxHp <= b.hp/b.maxHp ? a : b);
+  if (pick==='biggest'){ const big = es.filter(e => e.type==='brute'); if (big.length) return big.reduce((a,b) => dist(a,from) <= dist(b,from) ? a : b); }
+  return es.reduce((a,b) => dist(a,from) <= dist(b,from) ? a : b);
+}
+function resolveTarget(target, action, us, cursor){
+  const from = centroid(us);
+  switch (target.kind){
+    case 'point':    return { point:{ x:target.x, y:target.y }, label:`지정 위치 (${cellOf(target.x,target.y)})` };
+    case 'cursor': {
+      if (action==='attack'){ const e = alive('E').find(e => dist(e,cursor) < 50); if (e) return { enemy:e, label:`커서 아래 ${TYPES[e.type].name}` }; }
+      return { point:{...cursor}, label:`커서 위치 (${cellOf(cursor.x,cursor.y)})` };
+    }
+    case 'waypoint': return { point:{...WAYPOINTS[target.name]}, label:`${target.name} 지점` };
+    case 'grid':     return { point:cellCenter(target.cell), label:`${target.cell} 구역` };
+    case 'home':     return { point:homePoint(), label:'사령부 앞' };
+    case 'building': {
+      const r = resolveBuildingRef(target);
+      if (r.error) return { error:r.error };
+      const b = r.list.reduce((a,c) => dist(a,from) <= dist(c,from) ? a : c), d = BTYPES[b.bt];
+      return { point:{ x:b.x + d.w/2 + 40, y:b.y }, label:`${b.name} 앞`, building:b };
+    }
+    case 'enemy': {
+      const e = target.id != null ? byId(target.id) : pickEnemy(target.pick, from);
+      if (!e || e.side!=='E') return { error:'공격할 적이 보이지 않습니다' };
+      const pl = { nearest:'가장 가까운 적', weakest:'가장 약한 적', biggest:'거수' }[target.pick] || '지정한 적';
+      return { enemy:e, label:`${pl} (${TYPES[e.type].name})` };
+    }
+    default:
+      if (action==='attack'){ const e = pickEnemy('nearest', from); return e ? { enemy:e, label:`가장 가까운 적 (${TYPES[e.type].name})` } : { error:'공격할 적이 보이지 않습니다' }; }
+      if (['attackmove','move','patrol'].includes(action)) return { point:{...cursor}, label:`커서 위치 (${cellOf(cursor.x,cursor.y)})` };
+      if (action==='retreat') return { point:homePoint(), label:'사령부 앞' };
+      return { label:'제자리' };
+  }
+}
+function subjectLabel(subject, us){
+  const n = ` (${us.length}기)`;
+  if (!subject || subject.kind==='selection') return '선택한 유닛' + n;
+  if (subject.kind==='squad'){
+    const names = subject.ids.map(id => (squadById(id)||{}).name).filter(Boolean).join(', ');
+    return names + n + (subject.fuzzy ? ` — "${subject.fuzzy}"를 비슷한 발음으로 인식` : '');
+  }
+  if (subject.kind==='type') return subject.types.map(t => TYPES[t].name).join(', ') + n;
+  return '전군' + n;
+}
+function formationOffsets(n, gap){
+  const cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n/cols), out = [];
+  for (let i=0;i<n;i++){ const c=i%cols, r=Math.floor(i/cols); out.push({ x:(c-(cols-1)/2)*gap, y:(r-(rows-1)/2)*gap }); }
+  return out;
+}
+function snapshot(){ return alive('P').map(u => ({ id:u.id, order:{...u.order} })); }
+function restore(snap){ for (const s of snap){ const u = units.find(v => v.id===s.id && v.hp>0); if (u) u.order = {...s.order}; } }
+
+/* p에서 가까운 순으로 원을 넓혀 가며 지을 수 있는 자리를 찾는다 */
+function findSpot(bt, p){
+  for (let r=0; r<=700; r+=25){
+    const steps = r ? Math.ceil(2*Math.PI*r/40) : 1;
+    for (let i=0;i<steps;i++){
+      const a = i/steps*2*Math.PI, x = Math.round(p.x + Math.cos(a)*r), y = Math.round(p.y + Math.sin(a)*r);
+      if (canPlace(bt, x, y)) return { x, y };
+    }
+  }
+  return null;
+}
+function execBuild(cmd, cursor){
+  const bt = cmd.bt || placing;   // 종류를 안 말했으면 건설 버튼으로 골라 둔 건물
+  if (!bt) return { ok:false, who:'건설', what:'건설', where:'–', msg:'무엇을 지을지 말해 주세요 (병영, 군수공장, 우주공항, 사령부)' };
+  if (placing){ placing = null; refreshBuildBtns(); }
+  const tg = cmd.target.kind==='none' ? { point:homePoint(), label:'사령부 근처' } : resolveTarget(cmd.target, 'move', [homePoint()], cursor);
+  if (tg.error) return { ok:false, who:'건설', what:`${BTYPES[bt].name} 건설`, where:'–', msg:tg.error };
+  const p = tg.building ? { x:tg.building.x, y:tg.building.y } : tg.point || { x:tg.enemy.x, y:tg.enemy.y };
+  const made = [];
+  for (let i=0;i<cmd.count;i++){
+    const at = findSpot(bt, p); if (!at) break;
+    made.push(placeBuilding(bt, at.x, at.y).name);
+    pings.push({ x:at.x, y:at.y, life:0.9, max:0.9, kind:'move' });
+  }
+  if (!made.length) return { ok:false, who:'건설', what:`${BTYPES[bt].name} 건설`, where:tg.label, msg:'근처에 지을 자리가 없습니다' };
+  selChanged();
+  return { ok:true, who:'건설', what:`${made.join(', ')} 건설` + (made.length < cmd.count ? ` (자리가 없어 ${cmd.count-made.length}동 제외)` : ''), where:tg.label };
+}
+function execProduce(cmd){
+  let pool = null;
+  if (cmd.bref){ const r = resolveBuildingRef(cmd.bref); if (r.error) return [{ ok:false, who:'생산', what:'생산', where:'–', msg:r.error }]; pool = r.list; }
+  if (!cmd.items.length) return [{ ok:false, who: pool ? pool.map(b=>b.name).join(', ') : '생산', what:'생산', where:'–', msg:'무엇을 생산할지 말해 주세요 (예: 해병 10명)' }];
+  return cmd.items.map(it => {
+    const tn = TYPES[it.type].name, makers = (pool || buildings).filter(b => BTYPES[b.bt].makes.includes(it.type));
+    if (!makers.length){
+      const need = BTYPES[Object.keys(BTYPES).find(k => BTYPES[k].makes.includes(it.type))].name;
+      return { ok:false, who:'생산', what:`${tn} ${it.count}기 생산`, where:'–', msg: pool ? `${pool.map(b=>b.name).join(', ')}에서는 ${tn}을(를) 만들 수 없습니다` : `${tn}을(를) 만들 ${need}이(가) 없습니다` };
+    }
+    // 대기열이 가장 짧은 건물부터 하나씩 나눠 넣는다
+    const got = {}; let n = 0;
+    for (; n<it.count; n++){
+      const b = makers.filter(b => b.queue.length < QMAX).sort((a,c) => a.queue.length - c.queue.length)[0];
+      if (!b) break;
+      b.queue.push(it.type); got[b.name] = (got[b.name]||0) + 1;
+    }
+    if (!n) return { ok:false, who:makers.map(b=>b.name).join(', '), what:`${tn} ${it.count}기 생산`, where:'–', msg:'대기열이 가득 찼습니다' };
+    return { ok:true, who:Object.keys(got).join(', '), what:`${tn} ${n}기 생산 예약` + (n < it.count ? ` (대기열이 가득 차 ${it.count-n}기 제외)` : ''),
+      where:Object.entries(got).map(([k,v]) => `${k} ${v}기`).join(', ') };
+  });
+}
+
+function execute(cmds, cursor, quiet){
+  const results = [], snap = snapshot(); let changed = false;
+  for (const cmd of cmds){
+    if (cmd.action==='build'){ results.push(execBuild(cmd, cursor)); continue; }
+    if (cmd.action==='produce'){ results.push(...execProduce(cmd)); continue; }
+    if (cmd.action==='undo'){
+      const prev = undoStack.pop();
+      if (prev){ restore(prev); results.push({ ok:true, who:'직전 명령을 받은 유닛', what:ACTION_LABEL.undo, where:'–' }); }
+      else results.push({ ok:false, who:'–', what:ACTION_LABEL.undo, where:'–', msg:'되돌릴 명령이 없습니다' });
+      continue;
+    }
+    const us = resolveUnits(cmd.subject);
+    const who = subjectLabel(cmd.subject, us), what = ACTION_LABEL[cmd.action] + (cmd.fuzzyAction ? ` — "${cmd.fuzzyAction}"를 비슷한 발음으로 인식` : '');
+    if (!us.length){ results.push({ ok:false, who, what, where:'–', msg: (!cmd.subject || cmd.subject.kind==='selection') ? '누구에게 내린 명령인지 모르겠습니다. 부대 이름을 넣어 말하거나 유닛을 먼저 선택하세요' : '해당하는 유닛이 없습니다' }); continue; }
+    if (cmd.action==='stop' || cmd.action==='hold'){
+      us.forEach(u => { u.order = { kind: cmd.action==='stop' ? 'idle' : 'hold' }; u.flash = 0.6; });
+      results.push({ ok:true, who, what, where:'제자리' }); changed = true; continue;
+    }
+    const tg = resolveTarget(cmd.target, cmd.action, us, cursor);
+    if (tg.error){ results.push({ ok:false, who, what, where:'–', msg:tg.error }); continue; }
+    if (tg.enemy && (cmd.action==='attack' || cmd.action==='attackmove')){
+      us.forEach(u => { u.order = { kind:'attack', targetId:tg.enemy.id }; u.flash = 0.6; });
+      pings.push({ x:tg.enemy.x, y:tg.enemy.y, life:0.7, max:0.7, kind:'attack' });
+    } else {
+      const p = tg.point || (tg.enemy ? { x:tg.enemy.x, y:tg.enemy.y } : centroid(us));
+      const kind = cmd.action==='attack' ? 'attackmove' : cmd.action;
+      const offs = formationOffsets(us.length, 26);
+      us.forEach((u,i) => {
+        const x = Math.max(12, Math.min(W-12, p.x+offs[i].x)), y = Math.max(12, Math.min(H-12, p.y+offs[i].y));
+        u.order = kind==='patrol' ? { kind, x, y, bx:u.x, by:u.y } : { kind, x, y };
+        u.flash = 0.6;
+      });
+      pings.push({ x:p.x, y:p.y, life:0.7, max:0.7, kind: kind==='attackmove' ? 'attack' : 'move' });
+      if (cmd.target && cmd.target.kind==='grid') pings.push({ cell:cmd.target.cell, x:p.x, y:p.y, life:1.4, max:1.4, kind:'cell' });
+    }
+    results.push({ ok:true, who, what, where:tg.label }); changed = true;
+  }
+  if (changed){ undoStack.push(snap); if (undoStack.length > 20) undoStack.shift(); }
+  if (!quiet) beep(results.some(r => r.ok));
+  return results;
+}
+
+/* ================= 효과음 ================= */
+let actx = null;
+function tone(freq, t0, dur){
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = 'triangle'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001,t0); g.gain.exponentialRampToValueAtTime(0.12,t0+0.01); g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+  o.connect(g).connect(actx.destination); o.start(t0); o.stop(t0+dur+0.02);
+}
+function beep(ok){
+  try{ actx = actx || new (window.AudioContext||window.webkitAudioContext)(); const t = actx.currentTime;
+    if (ok){ tone(720,t,0.06); tone(960,t+0.06,0.07); } else tone(260,t,0.14); }catch(e){}
+}
+
+/* ================= 선택·건설·부대 패널 ================= */
+function el(tag, props, ...kids){ const e = document.createElement(tag); if (props) Object.assign(e, props); kids.flat().forEach(k => e.append(k)); return e; }
+function refreshBuildBtns(){
+  const box = $('#buildBtns'); box.textContent = '';
+  for (const bt of BUILDABLE){
+    const d = BTYPES[bt];
+    const b = el('button', { type:'button', className:'btn' + (placing===bt ? ' on' : '') }, d.name, el('small', { textContent: d.makes.length ? d.makes.map(t=>TYPES[t].name).join('·') : '후퇴 지점' }));
+    b.addEventListener('click', () => { placing = placing===bt ? null : bt; refreshBuildBtns(); });
+    box.append(b);
+  }
+}
+let selSig = '', squadSig = '', selRefs = {};
+function selChanged(){ selSig = ''; squadSig = ''; tickPanels(); }
+function tickPanels(){
+  // 선택 패널
+  const bSel = buildings.find(b => b.sel);
+  const uSel = alive('P').filter(u => u.sel);
+  const sig = bSel ? 'b'+bSel.id : 'u'+uSel.map(u=>u.id).join(',') + '|' + uSel.map(u=>u.squad).join(',');
+  if (sig !== selSig){ selSig = sig; renderSelection(bSel, uSel); }
+  if (bSel && selRefs.bar){
+    const t = bSel.queue.length ? TYPES[bSel.queue[0]] : null;
+    selRefs.bar.style.width = t ? Math.min(100, bSel.prog/t.bt*100)+'%' : '0';
+    selRefs.q.textContent = t ? `생산 중: ${t.name}${bSel.queue.length>1 ? `, 대기 ${bSel.queue.length-1}` : ''}` : '생산 대기열이 비어 있습니다.';
+    selRefs.hp.textContent = `내구도 ${Math.ceil(bSel.hp)} / ${bSel.maxHp}`;
+  }
+  // 부대 목록
+  const ss = squads.map(s => s.id+':'+s.num+':'+s.name+':'+composition(squadUnits(s))).join('|');
+  if (ss !== squadSig){ squadSig = ss; renderSquads(); }
+}
+function renderSelection(bSel, uSel){
+  const box = $('#selBox'); box.textContent = ''; selRefs = {};
+  if (bSel){
+    const d = BTYPES[bSel.bt];
+    box.append(el('p', { className:'sel-title', textContent:bSel.name }));
+    selRefs.hp = el('p', { className:'sel-sub' }); box.append(selRefs.hp);
+    if (d.makes.length){
+      const bw = el('div', { className:'btns' });
+      for (const t of d.makes){
+        const b = el('button', { type:'button', className:'btn' }, TYPES[t].name, el('small', { textContent:`${TYPES[t].bt}초` }));
+        b.addEventListener('click', e => { const n = e.shiftKey ? 5 : 1; for (let i=0;i<n && bSel.queue.length<QMAX;i++) bSel.queue.push(t); });
+        bw.append(b);
+      }
+      box.append(bw);
+      const pr = el('div', { className:'prog' }); selRefs.bar = el('span'); pr.append(selRefs.bar);
+      selRefs.q = el('p', { className:'sel-sub' });
+      box.append(pr, selRefs.q, el('p', { className:'hint', textContent:'Shift+클릭으로 5기씩 예약. 지도를 우클릭하면 집결 지점이 바뀝니다.' }));
+    } else box.append(el('p', { className:'hint', textContent:'"사령부로 후퇴"처럼 목적지로 쓰입니다. 생산 기능은 없습니다.' }));
+    return;
+  }
+  if (!uSel.length){ box.append(el('p', { className:'empty', textContent:'지도에서 유닛을 드래그하거나 건물을 클릭하세요.' })); return; }
+  const sqIds = [...new Set(uSel.map(u=>u.squad))];
+  const cur = sqIds.length===1 && sqIds[0] ? squadById(sqIds[0]) : null;
+  box.append(el('p', { className:'sel-title', textContent:`${uSel.length}기 선택` }),
+             el('p', { className:'sel-sub', textContent: composition(uSel) + (cur ? `, 현재 소속 ${cur.name}` : '') }));
+  const inp = el('input', { type:'text', placeholder:'부대 이름 (예: 독수리)', maxLength:10, value: cur ? cur.name : '' });
+  const btn = el('button', { type:'button', className:'btn primary', textContent:'부대 지정' });
+  const msg = el('p', { className:'msg' });
+  const go = () => { const r = assignSquad(inp.value.trim(), uSel); msg.textContent = r || ''; if (!r){ beep(true); } };
+  btn.addEventListener('click', go);
+  inp.addEventListener('keydown', e => { if (e.key==='Enter'){ e.preventDefault(); go(); } });
+  box.append(el('div', { className:'row' }, inp, btn), msg);
+}
+function assignSquad(name, us, forceNum){
+  if (!name) return '부대 이름을 입력하세요.';
+  if (RESERVED.test(name) || /부대$/.test(name) && !forceNum && /^\d/.test(name)) return '명령어와 겹치는 이름이라 쓸 수 없습니다.';
+  if (RESERVED.test(name)) return '명령어와 겹치는 이름이라 쓸 수 없습니다.';
+  let sq = squads.find(s => s.name === name);
+  if (!sq){
+    let num = forceNum;
+    if (!num){ for (let n=1;n<=9;n++) if (!squads.some(s=>s.num===n)){ num = n; break; } }
+    if (!num) return '부대는 9개까지 만들 수 있습니다.';
+    const clash = squads.find(s => s.num === num); if (clash) clash.num = null;
+    sq = { id:'s'+(nextId++), num, name }; squads.push(sq);
+  }
+  us.forEach(u => { u.squad = sq.id; u.flash = 0.6; });
+  pruneSquads(false);   // 유닛을 전부 다른 부대로 옮겨 빈 부대도 정리
+  // 비슷한 이름 경고
+  const near = squads.find(s => s !== sq && similarity(s.name, sq.name) >= 0.72);
+  selChanged();
+  return near ? `"${near.name}"와 발음이 비슷해 음성으로 헷갈릴 수 있습니다.` : '';
+}
+/* 유닛이 하나도 남지 않은 부대는 이름과 번호를 지운다. 이름을 다시 쓸 수 있고, 음성 해석기가 없는 부대와 헷갈리지 않는다 */
+function pruneSquads(fromDeath){
+  const gone = squads.filter(sq => !squadUnits(sq).length);
+  if (!gone.length) return;
+  squads = squads.filter(sq => !gone.includes(sq));
+  if (fromDeath) gone.forEach(sq => addLog(`${sq.name} 부대 전멸`, '부대 이름 삭제', false));
+}
+function renderSquads(){
+  const list = $('#squadList'); list.textContent = '';
+  $('#squadEmpty').hidden = squads.length > 0;
+  for (const sq of [...squads].sort((a,b) => (a.num||99) - (b.num||99))){
+    const us = squadUnits(sq);
+    const nm = el('button', { type:'button', className:'nm', textContent:sq.name, title:'이 부대 선택' });
+    nm.addEventListener('click', () => { buildings.forEach(b=>b.sel=false); alive('P').forEach(u => u.sel = u.squad===sq.id); selChanged(); });
+    const x = el('button', { type:'button', className:'x', textContent:'해제', title:'부대 해제' });
+    x.addEventListener('click', () => { units.forEach(u => { if (u.squad===sq.id) u.squad = null; }); squads = squads.filter(s => s!==sq); selChanged(); });
+    list.append(el('li', null, el('span', { className:'num', textContent: sq.num || '–' }), nm,
+      el('span', { className:'cmp', textContent: composition(us) }), x));
+  }
+}
+
+/* ================= 해석 결과·지연·기록 출력 ================= */
+function showParsed(raw, results, path, unparsed, note){
+  const box = $('#parsed'); box.textContent = '';
+  const dl = el('dl', { className:'parsed' });
+  const add = (k,v) => dl.append(el('dt', { textContent:k }), el('dd', { textContent:v }));
+  add('들은 말', raw); add('해석 주체', path);
+  results.forEach(r => { dl.append(el('div', { className:'sep' })); add('누가', r.who); add('무엇을', r.what); add('어디에', r.where); if (!r.ok) add('결과', r.msg); });
+  if (unparsed && unparsed.length){ dl.append(el('div', { className:'sep' })); add('못 알아들은 부분', unparsed.join(' / ')); }
+  if (note){ dl.append(el('div', { className:'sep' })); add('AI 설명', note); }
+  box.append(dl);
+}
+function addLog(raw, path, ok, total, detail){
+  const li = el('li', { className: ok ? 'ok' : 'bad' },
+    el('div', { className:'raw', textContent:raw }),
+    el('div', { className:'meta', textContent:`${path}${total!=null ? ', '+ms(total) : ''}${detail ? ', '+detail : ''}` }));
+  const log = $('#log'); log.prepend(li); while (log.children.length > 12) log.lastChild.remove();
+}
+const SEG = [ ['stt','음성 인식 (말 끝 → 문장 확정)','accent'], ['parse','명령 해석','muted'], ['apply','게임 적용','friend'] ];
+function recordLatency(e){
+  latencyHist.push(e); if (latencyHist.length > 10) latencyHist.shift();
+  const box = $('#latency'); box.textContent = '';
+  const total = (e.stt||0) + e.parse + e.apply, scale = 1200;
+  const bar = el('div', { className:'bar' }); let acc = 0;
+  for (const [k,,col] of SEG){ const v = e[k]||0; if (!v) continue;
+    const sp = el('span'); sp.style.left = (acc/scale*100)+'%'; sp.style.width = Math.max(0.6, v/scale*100)+'%'; sp.style.background = C[col]; bar.append(sp); acc += v; }
+  const goal = el('i', { className:'goal', title:'목표 0.5초' }); goal.style.left = (500/scale*100)+'%'; bar.append(goal);
+  const tbl = el('table', { className:'lat' });
+  for (const [k,label,col] of SEG){
+    const sw = el('span', { className:'sw' }); sw.style.background = C[col];
+    tbl.append(el('tr', null, el('td', null, sw, label), el('td', { textContent: k==='stt' && e.stt==null ? (e.early ? '말하는 중 실행' : '해당 없음') : ms(e[k]) })));
+  }
+  const tr = el('tr', null, el('td', { textContent:`합계 (${e.path})` }), el('td', { textContent:ms(total) }));
+  tr.style.fontWeight = '600'; tbl.append(tr);
+  const vo = latencyHist.filter(x => x.stt != null);
+  box.append(bar, tbl, el('p', { className:'avg', textContent: vo.length
+    ? `최근 음성 명령 ${vo.length}건 평균 ${ms(vo.reduce((s,x)=>s+x.stt+x.parse+x.apply,0)/vo.length)} (세로선이 0.5초 목표)` : '세로선이 0.5초 목표입니다.' }));
+}
+
+/* ================= AI 해석기 (느린 경로) ================= */
+if (window.claude && typeof window.claude.use === 'function'){
+  window.claude.use('sample').then(s => { sample = s; if (s) $('#aiRow').hidden = false; }).catch(()=>{});
+}
+const aiEnabled = () => !!sample && $('#optAI').checked;
+function buildPrompt(cands, cursor){
+  const sl = squads.map(sq => { const us = squadUnits(sq); if (!us.length) return `"${sq.name}"(${sq.num||'-'}번): 전멸`;
+    const c = centroid(us); return `"${sq.name}"(${sq.num||'-'}번): ${composition(us)}, 위치 ${cellOf(c.x,c.y)}`; }).join('\n') || '없음';
+  const bl = buildings.map(b => `${b.name} ${cellOf(b.x,b.y)}`).join(', ') || '없음';
+  const es = alive('E'), groups = {};
+  es.forEach(e => { const k = cellOf(e.x,e.y); (groups[k] = groups[k] || []).push(e); });
+  const el2 = Object.entries(groups).slice(0,12).map(([k,v]) => `${k}: ${composition(v)} (예: id=${v[0].id})`).join('\n') || '없음';
+  return `너는 실시간 전략 게임의 음성 명령 해석기다. 플레이어가 말한 한국어 명령을 게임 명령 JSON으로만 바꿔라. 설명 문장 없이 JSON 하나만 출력한다. 음성 인식 결과라서 부대 이름이 비슷한 발음으로 잘못 적혔을 수 있으니, 가장 가까운 부대 이름으로 판단하라. 구역도 "에이원", "비 삼", "씨투"처럼 발음대로 적힐 수 있으니 A1, B3, C2처럼 해석하라.
+
+지도: 가로 A~H, 세로 1~5 구역.
+지점: 알파(B2) 브라보(B4) 찰리(F2) 델타(F4)
+아군 건물: ${bl}
+아군 부대 (이름, 번호, 구성, 위치):
+${sl}
+선택된 유닛 수: ${alive('P').filter(u=>u.sel).length}
+마우스 커서 위치: ${cellOf(cursor.x,cursor.y)} ("여기/저기"는 커서)
+적 분포:
+${el2}
+
+출력 형식:
+{"commands":[{"subject":S,"action":A,"target":T}],"say":"플레이어에게 보여줄 한 줄 요약"}
+S: {"kind":"squad","names":["부대이름"]} | {"kind":"type","types":["marine"|"firebat"|"medic"|"bike"|"tank"|"fighter"|"bomber"]} | {"kind":"all"} | {"kind":"selection"}
+A: "move" | "attack" | "attackmove" | "hold" | "stop" | "retreat" | "patrol"
+T: {"kind":"cursor"} | {"kind":"waypoint","name":"알파"} | {"kind":"grid","cell":"B3"} | {"kind":"building","bt":"hq"|"barracks"|"factory"|"starport"} | {"kind":"enemy","id":숫자} | {"kind":"enemy","pick":"nearest"|"weakest"|"biggest"} | {"kind":"none"}
+여러 부대에 다른 일을 시키면 commands를 여러 개로 나눈다. 명령으로 해석할 수 없으면 {"commands":[],"say":"이유"}.
+
+${cands.length > 1
+  ? '플레이어 명령 (음성 인식 후보, 앞쪽일수록 가능성이 높다. 명령으로 가장 말이 되는 것을 골라 해석하라):\n' + cands.map((c,i) => `${i+1}) "${c.replace(/"/g,"'")}"`).join('\n')
+  : `플레이어 명령: "${cands[0].replace(/"/g,"'")}"`}`;
+}
+function validateAI(out){
+  const ok = [], A = ['move','attack','attackmove','hold','stop','retreat','patrol'];
+  for (const c of (out && Array.isArray(out.commands) ? out.commands : [])){
+    if (!c || !A.includes(c.action)) continue;
+    let s = c.subject || { kind:'selection' };
+    if (s.kind==='squad'){ const ids = (Array.isArray(s.names)?s.names:[]).map(n => (squads.find(q => q.name===String(n))||{}).id).filter(Boolean); s = { kind:'squad', ids }; if (!ids.length) continue; }
+    else if (s.kind==='type'){ const types = (Array.isArray(s.types)?s.types:[]).filter(t => TYPES[t] && TYPES[t].side==='P'); if (!types.length) continue; s = { kind:'type', types }; }
+    else if (s.kind!=='all') s = { kind:'selection' };
+    let t = c.target || { kind:'none' };
+    if (t.kind==='waypoint' && !WAYPOINTS[t.name]) t = { kind:'none' };
+    if (t.kind==='grid' && !/^[A-H][1-5]$/.test(String(t.cell||''))) t = { kind:'none' };
+    if (t.kind==='building' && !BTYPES[t.bt]) t = { kind:'none' };
+    if (t.kind==='enemy') t = t.id != null ? { kind:'enemy', id:Number(t.id) } : { kind:'enemy', pick: ['nearest','weakest','biggest'].includes(t.pick) ? t.pick : 'nearest' };
+    if (!['cursor','waypoint','grid','building','enemy','none'].includes(t.kind)) t = { kind:'none' };
+    ok.push({ subject:s, action:c.action, target:t });
+  }
+  return ok;
+}
+const AI_ERR = { not_granted:'AI 해석 사용이 허용되지 않았습니다', rate_limited:'AI 호출이 너무 잦습니다. 잠시 뒤 다시 시도하세요',
+  invalid_json:'AI 답을 명령으로 읽지 못했습니다', refused:'AI가 이 명령을 처리하지 않았습니다', session_expired:'다시 로그인이 필요합니다' };
+
+/* ================= 텍스트 → 명령 공통 처리 ================= */
+/* 인식 후보 여러 개 중 가장 온전하게 해석되는 것을 고른다. 대상·동작·목표가 다 있을수록, 발음 추정이 적을수록, 못 알아들은 부분이 적을수록 높다 */
+function parseScore(p){
+  let sc = 0;
+  for (const c of p.cmds){
+    if (c.action==='build' || c.action==='produce'){ sc += 3; continue; }
+    sc += !c.subject ? 0 : c.subject.fuzzy ? 1.5 : 2;
+    sc += c.fuzzyAction ? 0.5 : 1;
+    if (c.target.kind !== 'none') sc += 1;
+  }
+  return sc - p.unparsed.length * 1.5;
+}
+let busyAI = false;
+async function handleText(cands, meta){
+  const t0 = performance.now();
+  let parsed = null, used = cands[0];
+  { let bestSc = -Infinity;
+    cands.forEach((c, i) => { const p = parseText(c); if (!p.cmds.length) return; const sc = parseScore(p) - i*0.1;
+      if (sc > bestSc){ bestSc = sc; parsed = p; used = c; } }); }
+  const t1 = performance.now();
+  const src = meta.source==='voice' ? '음성' : '텍스트';
+  if (parsed){
+    if (meta.earlySig && meta.earlySig === sigOf(parsed.cmds)){ addLog(used, `${src}, 규칙 해석기`, true, null, '말하는 중 이미 실행됨'); return; }
+    if (meta.earlySnap){ restore(meta.earlySnap); undoStack.pop(); }
+    const res = execute(parsed.cmds, meta.cursor); const t2 = performance.now();
+    showParsed(used, res, '규칙 해석기 (빠른 경로)', parsed.unparsed);
+    recordLatency({ stt:meta.stt, parse:t1-t0, apply:t2-t1, path:'규칙' });
+    addLog(used, `${src}, 규칙 해석기`, res.some(r=>r.ok), (meta.stt||0) + (t2-t0));
+    return;
+  }
+  if (aiEnabled() && !busyAI){
+    busyAI = true; setStatus('AI가 명령을 해석하는 중…');
+    try{
+      const out = await sample.json(buildPrompt(cands, meta.cursor), { modelTier:'quick' });
+      const t2 = performance.now(), cmds = validateAI(out);
+      if (cmds.length){
+        const res = execute(cmds, meta.cursor); const t3 = performance.now();
+        showParsed(used, res, 'AI 해석기 (Claude, 느린 경로)', null, out && out.say);
+        recordLatency({ stt:meta.stt, parse:t2-t0, apply:t3-t2, path:'AI' });
+        addLog(used, `${src}, AI 해석기`, res.some(r=>r.ok), (meta.stt||0) + (t3-t0));
+      } else {
+        beep(false); showParsed(used, [], 'AI 해석기 (Claude)', null, (out && out.say) || '명령으로 해석하지 못했습니다');
+        addLog(used, `${src}, AI 해석기`, false, null, '명령 아님');
+      }
+      setStatus('');
+    } catch(e){
+      beep(false);
+      const code = e && e.code;
+      if (['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed'].includes(code)){ sample = null; $('#aiRow').hidden = true; }
+      setStatus(AI_ERR[code] || 'AI 해석에 실패했습니다. 다시 말해 보세요', true);
+      addLog(used, `${src}, AI 해석기`, false, null, '실패');
+    } finally { busyAI = false; }
+    return;
+  }
+  beep(false);
+  const up = parseText(used).unparsed;
+  showParsed(used, [], '규칙 해석기', up.length ? up : [used]);
+  addLog(used, `${src}, 규칙 해석기`, false, null, '해석 실패');
+}
+
+/* ================= 음성 입력 (Push-to-Talk) ================= */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, utter = null, uttSeq = 0;
+function setStatus(msg, err){ const e = $('#voiceStatus'); e.textContent = msg || ''; e.className = 'status' + (err?' err':''); }
+function setTranscript(text, idle){ const e = $('#transcript'); e.textContent = text; e.className = 'transcript' + (idle?' idle':''); }
+function clearPending(){ units.forEach(u => u.pending = false); }
+/* 음성 인식 API는 있지만 Google 서버 키가 없어 항상 network 오류가 나는 Chromium 계열 브라우저 */
+const BAD_SR_BROWSER = navigator.brave ? 'Brave' : /OPR\//.test(navigator.userAgent) ? 'Opera' : /Vivaldi/.test(navigator.userAgent) ? 'Vivaldi' : null;
+if (SR && BAD_SR_BROWSER) setStatus(`${BAD_SR_BROWSER}에서는 음성 인식 서버에 연결되지 않습니다. Chrome이나 Edge에서 여세요. 텍스트 명령창은 그대로 동작합니다.`, true);
+else if (!SR) setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. Chrome이나 Edge에서 열거나 텍스트 명령창을 쓰세요.', true);
+else if (location.protocol === 'file:') setStatus('파일을 직접 열면 음성 인식 서버 연결이 실패하고 마이크 권한도 매번 다시 묻습니다. 같은 폴더의 실행.bat으로 여세요.', true);
+
+/* 인식기를 누를 때마다 새로 켜면 실제 녹음이 시작되기까지 수백 ms가 걸려 첫 단어(대개 부대 이름)가 잘린다.
+   그래서 한 번 켠 인식기는 마지막 발화 뒤 WARM_MS 동안 켜 둔 채 기다리고, 누르고 있던 구간의 결과만 쓴다.
+   키를 뗀 뒤에도 TAIL_MS 동안 더 들어서 마지막 음절이 잘리지 않게 한다. */
+const TAIL_MS = 300, WARM_MS = 10000, FINAL_TIMEOUT_MS = 3000;
+let recState = 'off', recFatal = false, warmUntil = 0, warmTimer = null, sess = [], warmOffByNet = false;
+const firstOpen = () => { const i = sess.findIndex(r => !r.final); return i < 0 ? sess.length : i; };
+const uttResults = u => u.prev.concat(sess.slice(u.base));
+/* 인식 엔진: Chrome은 한국어를 기기 안에서(오프라인) 인식할 수 있다. 서버 연결 실패가 없고, 부대·건물 이름을 우선 알아듣도록 힌트(phrases)를 줄 수 있다.
+   기기 안 모델이 없으면 한 번 내려받아야 하고, 그 전까지는 Google 서버로 인식한다. */
+let localSR = 'unavailable';   // available | downloadable | downloading | unavailable
+const canPhrases = typeof window.SpeechRecognitionPhrase === 'function';
+const useLocal = () => localSR === 'available' && $('#optEngine').value === 'local';
+async function checkLocal(){
+  if (!SR || typeof SR.available !== 'function') return updateEngineUI();
+  try{ localSR = await SR.available({ langs:['ko-KR'], processLocally:true }); }catch(e){ localSR = 'unavailable'; }
+  updateEngineUI();
+}
+async function installLocal(){
+  if (localSR !== 'downloadable') return;
+  localSR = 'downloading'; updateEngineUI();
+  try{ await SR.install({ langs:['ko-KR'], processLocally:true }); }catch(e){}
+  await checkLocal();
+  resetRec();
+  if (localSR === 'available') setStatus('오프라인 음성 인식을 켰습니다. 이제 서버 없이 인식합니다.');
+}
+function updateEngineUI(){
+  const info = $('#engineInfo'), btn = $('#engineInstall');
+  const local = localSR === 'available';
+  btn.hidden = localSR !== 'downloadable' && localSR !== 'downloading';
+  btn.disabled = localSR === 'downloading';
+  btn.textContent = localSR === 'downloading' ? '한국어 음성 모델 내려받는 중…' : '한국어 오프라인 음성 모델 내려받기';
+  $('#optEngine').disabled = !local;
+  info.textContent = useLocal() ? `지금: 기기 안에서 인식 (서버 안 씀${canPhrases ? ', 부대·건물 이름 우선 인식' : ''})`
+    : local ? '지금: Google 서버로 인식'
+    : localSR === 'unavailable' ? '지금: 서버로 인식 (이 브라우저는 오프라인 인식을 지원하지 않습니다)'
+    : '지금: Google 서버로 인식. 모델을 받으면 서버 없이 인식하고 연결 실패가 없어집니다.';
+}
+function resetRec(){
+  if (rec){ const r = rec; rec = null; try{ r.abort(); }catch(e){} }
+  recState = 'off'; sess = [];
+  updateEngineUI();
+}
+// 음성 인식 힌트: 지금 있는 부대·건물 이름은 강하게, 명령어는 약하게
+function buildPhrases(){
+  const P = (w, b) => new SpeechRecognitionPhrase(w, b);
+  const words = ['공격','이동','후퇴','진격','홀드','정지','순찰','취소','집결','건설','생산',
+    '알파','브라보','찰리','델타','해병','화염병','의무병','바이크','전차','전투기','폭격기','병영','군수공장','우주공항','사령부','전군'];
+  return [...squads.map(s => P(s.name, 6)), ...buildings.map(b => P(b.name, 4)), ...words.map(w => P(w, 2))];
+}
+function recStart(){
+  if (recState !== 'off') return;
+  if (rec.processLocally && canPhrases && !rec.noPhrases){ try{ rec.phrases = buildPhrases(); }catch(e){ rec.noPhrases = true; } }
+  try{ rec.start(); recState = 'starting'; }
+  catch(e){ setStatus('음성 인식을 시작하지 못했습니다.', true); }
+}
+function recStop(){
+  if (recState !== 'starting' && recState !== 'on') return;
+  recState = 'stopping';
+  try{ rec.stop(); }catch(e){}
+}
+function ensureRec(){
+  if (rec) return;
+  const r = new SR(); rec = r;
+  r.lang = 'ko-KR'; r.interimResults = true; r.continuous = true; r.maxAlternatives = 3;
+  if (useLocal()) r.processLocally = true;
+  r.onaudiostart = () => {
+    if (r !== rec) return;
+    if (recState === 'starting') recState = 'on';
+    const u = utter;
+    if (u && !u.done && !u.tRelease){ setStatus('듣는 중'); try{ tone(880, actx.currentTime, 0.05); }catch(e){} }
+  };
+  r.onresult = ev => {
+    if (r !== rec) return;
+    sess = Array.from(ev.results).map(x => ({ final:x.isFinal, alts:Array.from(x).map(a => a.transcript) }));
+    const u = utter;
+    if (u && !u.done) onUtterResults(u);
+  };
+  r.onerror = ev => {
+    if (r !== rec) return;
+    if (ev.error === 'phrases-not-supported'){ r.noPhrases = true; return; }
+    // 기기 안 모델이 사라졌으면 서버로 되돌린다
+    if (ev.error === 'language-not-supported' && r.processLocally){ localSR = 'unavailable'; checkLocal(); rec = null; recState = 'off'; recFatal = true; }
+    // 이 오류들은 곧바로 다시 켜도 또 실패한다. 자동 재시작을 멈추고 다음에 누를 때 다시 시도한다
+    if (['not-allowed','service-not-allowed','audio-capture','network'].includes(ev.error)) recFatal = true;
+    if (ev.error === 'network' && $('#optWarm').checked){ $('#optWarm').checked = false; warmOffByNet = true; }
+    const u = utter;
+    if (!u || u.done || ev.error === 'aborted') return;   // 기다리는 동안(예열 중) 난 오류는 조용히 넘긴다
+    const net = '음성 인식 서버에 연결하지 못했습니다. ' + (location.protocol === 'file:' ? '파일을 직접 열어서 생기는 문제입니다. 같은 폴더의 실행.bat으로 여세요.' : BAD_SR_BROWSER ? `${BAD_SR_BROWSER}에서는 음성 인식 서버를 쓸 수 없습니다. Chrome이나 Edge로 여세요.`
+      : localSR === 'downloadable' ? '설정의 "한국어 오프라인 음성 모델 내려받기"를 누르면 서버 없이 인식합니다.'
+      : 'VPN·회사 방화벽·인터넷 연결을 확인하고 다시 눌러 보세요.') + (warmOffByNet ? ' (마이크 예열은 자동으로 껐습니다)' : '');
+    const map = { 'not-allowed':'마이크 권한이 막혀 있습니다. 이 화면에서 마이크를 쓸 수 없다면 파일을 받아 Chrome에서 직접 열어 보세요. 텍스트 명령창은 그대로 동작합니다.',
+      'service-not-allowed':'이 환경에서는 음성 인식 서비스를 쓸 수 없습니다. 텍스트 명령창을 쓰세요.',
+      'no-speech':'말소리가 들리지 않았습니다.', 'audio-capture':'마이크를 찾을 수 없습니다.', 'network':net,
+      'language-not-supported':'오프라인 음성 모델을 쓸 수 없어 서버 인식으로 되돌립니다. 다시 눌러 말하세요.' };
+    setStatus(map[ev.error] || ('음성 인식 오류: ' + ev.error), ev.error !== 'no-speech');
+  };
+  r.onend = () => {
+    if (r !== rec && rec !== null) return;
+    recState = 'off';
+    const u = utter;
+    if (u && !u.done){ u.prev = uttResults(u); u.base = 0; }
+    sess = [];
+    if (!rec) ensureRec();   // 엔진을 바꾸는 중이었다
+    if (u && !u.done){
+      if (u.tRelease || recFatal){ finalize(u); setPTT(false); }
+      else recStart();   // 누르고 있는 동안 브라우저가 세션을 끊으면 이어서 듣는다
+    }
+    if ((!utter || utter.done) && !recFatal && performance.now() < warmUntil) recStart();
+  };
+}
+
+function onUtterResults(my){
+  const results = uttResults(my);
+  const text = results.map(r => r.alts[0]).join(' ').trim();
+  setTranscript(text || '…', !text);
+  clearPending();
+  const ps = parseSubject(text);
+  if (ps.subject) resolveUnits(ps.subject).forEach(u => u.pending = true);
+  if ($('#optFast').checked && text){
+    const p = parseText(text);
+    if (p.cmds.length && !p.cmds.some(c => ['undo','build','produce'].includes(c.action))){   // 되돌릴 수 없는 명령은 말이 끝난 뒤에만
+      const sig = sigOf(p.cmds);
+      if (sig !== my.earlySig){
+        const t0 = performance.now();
+        if (my.earlySnap){ restore(my.earlySnap); undoStack.pop(); }
+        my.earlySnap = snapshot();
+        const res = execute(p.cmds, my.tRelease ? pickCursor(my) : {...cursorWorld});
+        const t1 = performance.now();
+        my.earlySig = sig;
+        showParsed(text, res, '규칙 해석기 (말하는 중 실행)', p.unparsed);
+        recordLatency({ stt:null, early:true, parse:t1-t0, apply:0.1, path:'규칙, 말하는 중' });
+      }
+    }
+  }
+  if (my.stopped && results.length && results.every(r => r.final)) finalize(my);
+}
+
+function startPTT(){
+  if (!SR){ beep(false); return; }
+  if (utter && !utter.done){ if (!utter.tRelease) return; finalize(utter); }   // 직전 발화가 확정 전이면 있는 그대로 처리
+  try{ actx = actx || new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
+  ensureRec(); recFatal = false; clearTimeout(warmTimer);
+  // 누르기 직전에 이미 말하기 시작해 아직 확정 안 된 결과가 있으면 그것도 이번 발화에 포함한다
+  utter = { id:++uttSeq, cursorStart:{...cursorWorld}, tRelease:null, base:firstOpen(), prev:[], stopped:false, done:false, earlySig:null, earlySnap:null };
+  setPTT(true); setTranscript('…', true);
+  if (recState === 'on') setStatus('듣는 중');
+  else { setStatus('마이크 준비 중… 신호음이 나면 말하세요'); recStart(); }
+}
+function stopPTT(){
+  const u = utter;
+  if (!u || u.tRelease) return;
+  u.tRelease = performance.now(); u.cursorEnd = {...cursorWorld};
+  setPTT(false);
+  const warm = $('#optWarm').checked ? WARM_MS : 0;
+  warmUntil = u.tRelease + warm;
+  clearTimeout(warmTimer);
+  warmTimer = setTimeout(() => { if (!utter || utter.done) recStop(); }, Math.max(warm, TAIL_MS + 50));
+  setTimeout(() => {
+    if (u.done) return;
+    u.stopped = true;
+    const rs = uttResults(u);
+    if (rs.length && rs.every(r => r.final)) finalize(u);   // 이미 확정됐으면 인식기는 켜 둔 채 바로 처리
+    else if (recState === 'off') finalize(u);
+    else recStop();   // 멈추면 브라우저가 남은 결과를 바로 확정하고, onend에서 처리한 뒤 다시 켠다
+  }, TAIL_MS);
+  setTimeout(() => finalize(u), TAIL_MS + FINAL_TIMEOUT_MS);   // onend가 끝내 안 오는 경우 대비
+}
+function pickCursor(u){ return $('#optCursor').value === 'start' ? u.cursorStart : (u.cursorEnd || {...cursorWorld}); }
+function finalize(u){
+  if (u.done) return; u.done = true;
+  const tFinal = performance.now();
+  clearPending();
+  const results = uttResults(u);
+  if (!results.length){ if (!$('#voiceStatus').classList.contains('err')) setStatus('인식된 말이 없습니다.'); setTranscript('부대 이름을 부르며 명령하세요', true); return; }
+  const cands = [];
+  for (let k=0;k<3;k++){ const s = results.map(r => r.alts[k] != null ? r.alts[k] : r.alts[0]).join(' ').trim(); if (s && !cands.includes(s)) cands.push(s); }
+  if (!cands.length) return;
+  setTranscript(cands[0]); if (!$('#voiceStatus').classList.contains('err')) setStatus('');
+  handleText(cands, { source:'voice', stt: u.tRelease ? Math.max(0, tFinal - u.tRelease) : null, cursor:pickCursor(u), earlySig:u.earlySig, earlySnap:u.earlySnap });
+}
+function setPTT(on){ const b = $('#ptt'); b.classList.toggle('live', on); b.firstChild.textContent = on ? '듣는 중… 떼면 실행' : '누르고 말하기'; }
+
+/* ================= 입력 바인딩 ================= */
+const pttBtn = $('#ptt');
+pttBtn.addEventListener('pointerdown', e => { e.preventDefault(); pttBtn.setPointerCapture(e.pointerId); startPTT(); });
+pttBtn.addEventListener('pointerup', () => stopPTT());
+pttBtn.addEventListener('pointercancel', () => stopPTT());
+pttBtn.addEventListener('keydown', e => { if (e.code==='Enter' && !e.repeat){ e.preventDefault(); startPTT(); } });
+pttBtn.addEventListener('keyup', e => { if (e.code==='Enter') stopPTT(); });
+
+const inField = e => { const t = e.target; return t && ['INPUT','SELECT','TEXTAREA'].includes(t.tagName) && t.type !== 'checkbox'; };
+window.addEventListener('keydown', e => {
+  if (inField(e)){ if (e.key==='Escape') e.target.blur(); return; }
+  if (e.code==='Space'){ e.preventDefault(); if (!e.repeat) startPTT(); return; }
+  if (e.key==='Escape'){ placing = null; refreshBuildBtns(); return; }
+  const m = e.code.match(/^Digit([1-9])$/);
+  if (m){
+    const n = Number(m[1]), mine = alive('P');
+    if (e.ctrlKey || e.metaKey){
+      e.preventDefault();
+      const sel = mine.filter(u => u.sel); if (!sel.length) return;
+      const ex = squads.find(s => s.num === n);
+      assignSquad(ex ? ex.name : `${n}번대`, sel, n);
+    } else {
+      const sq = squads.find(s => s.num === n); if (!sq) return;
+      buildings.forEach(b => b.sel = false); mine.forEach(u => u.sel = u.squad === sq.id); selChanged();
+    }
+  }
+});
+window.addEventListener('keyup', e => { if (e.code==='Space' && !inField(e)){ e.preventDefault(); stopPTT(); } });
+window.addEventListener('blur', () => stopPTT());
+
+function toWorld(e){ const r = cv.getBoundingClientRect(); return { x:(e.clientX-r.left)/r.width*W, y:(e.clientY-r.top)/r.height*H }; }
+function pickUnit(p, side){ let best=null, bd=22; for (const u of alive(side)){ const d = dist(u,p) - TYPES[u.type].r; if (d < bd){ bd=d; best=u; } } return best; }
+function pickBuilding(p){ return buildings.find(b => { const d = BTYPES[b.bt]; return Math.abs(p.x-b.x) <= d.w/2 && Math.abs(p.y-b.y) <= d.h/2; }); }
+cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('pointerdown', e => {
+  const p = toWorld(e); cursorWorld = p;
+  if (e.button === 2){
+    if (placing){ placing = null; refreshBuildBtns(); return; }
+    const selU = alive('P').filter(u => u.sel), selB = buildings.find(b => b.sel);
+    if (selU.length){
+      const en = pickUnit(p,'E');
+      execute([{ subject:{kind:'selection'}, action: en?'attack':'move', target: en?{kind:'enemy',id:en.id}:{kind:'point',x:p.x,y:p.y} }], p, true);
+    } else if (selB){ selB.rally = { x:p.x, y:p.y }; pings.push({ x:p.x, y:p.y, life:0.6, max:0.6, kind:'move' }); }
+    return;
+  }
+  if (placing){
+    if (canPlace(placing, p.x, p.y)){ placeBuilding(placing, p.x, p.y); if (!e.shiftKey){ placing = null; refreshBuildBtns(); } }
+    else beep(false);
+    return;
+  }
+  drag = { x0:p.x, y0:p.y, x1:p.x, y1:p.y, add:e.shiftKey, moved:false };
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  const p = toWorld(e); cursorWorld = p;
+  if (drag){ drag.x1 = p.x; drag.y1 = p.y; if (Math.hypot(drag.x1-drag.x0, drag.y1-drag.y0) > 10) drag.moved = true; }
+});
+cv.addEventListener('pointerup', () => {
+  if (!drag) return;
+  const mine = alive('P');
+  if (!drag.moved){
+    const p = { x:drag.x0, y:drag.y0 }, u = pickUnit(p,'P'), b = u ? null : pickBuilding(p);
+    if (!drag.add){ mine.forEach(v => v.sel = false); buildings.forEach(v => v.sel = false); }
+    if (u){ buildings.forEach(v => v.sel = false); u.sel = drag.add ? !u.sel : true; }
+    else if (b){ mine.forEach(v => v.sel = false); buildings.forEach(v => v.sel = false); b.sel = true; }
+  } else {
+    const x0=Math.min(drag.x0,drag.x1), x1=Math.max(drag.x0,drag.x1), y0=Math.min(drag.y0,drag.y1), y1=Math.max(drag.y0,drag.y1);
+    if (!drag.add) mine.forEach(v => v.sel = false);
+    buildings.forEach(v => v.sel = false);
+    mine.forEach(v => { if (v.x>=x0 && v.x<=x1 && v.y>=y0 && v.y<=y1) v.sel = true; });
+  }
+  drag = null; selChanged();
+});
+
+function sendText(){
+  const inp = $('#cmdInput'), v = inp.value.trim(); if (!v) return;
+  inp.value = ''; setTranscript(v);
+  handleText([v], { source:'text', stt:null, cursor:{...cursorWorld} });
+}
+$('#cmdSend').addEventListener('click', sendText);
+$('#cmdInput').addEventListener('keydown', e => { if (e.key==='Enter'){ e.preventDefault(); sendText(); } });
+$('#resetBtn').addEventListener('click', reset);
+$('#waveNow').addEventListener('click', () => { spawnWave(); waveTimer = 35; });
+$('#optEnemy').addEventListener('change', updateHud);
+$('#engineInstall').addEventListener('click', installLocal);
+$('#optEngine').addEventListener('change', () => { if (!utter || utter.done) resetRec(); else updateEngineUI(); });
+checkLocal();
+
+reset(); resize(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
