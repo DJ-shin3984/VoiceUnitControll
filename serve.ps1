@@ -19,10 +19,12 @@ while ($listener.IsListening) {
         $rel = [Uri]::UnescapeDataString($ctx.Request.Url.AbsolutePath.TrimStart('/'))
         if (-not $rel) { $rel = 'voice-rts.html' }
         $path = [IO.Path]::GetFullPath((Join-Path $root $rel))
-        if ($path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path $path -PathType Leaf)) {
+        $ext = [IO.Path]::GetExtension($path).ToLower()
+        # Only files inside this folder (not a sibling like VoiceControll-backup), only web file types, nothing under .git
+        if ($path.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -and $types.ContainsKey($ext) -and
+            $path -notmatch '\\\.git\\' -and (Test-Path $path -PathType Leaf)) {
             $bytes = [IO.File]::ReadAllBytes($path)
-            $ext = [IO.Path]::GetExtension($path).ToLower()
-            if ($types.ContainsKey($ext)) { $res.ContentType = $types[$ext] } else { $res.ContentType = 'application/octet-stream' }
+            $res.ContentType = $types[$ext]
             $res.Headers.Add('Cache-Control', 'no-store')
             $res.OutputStream.Write($bytes, 0, $bytes.Length)
         } else { $res.StatusCode = 404 }

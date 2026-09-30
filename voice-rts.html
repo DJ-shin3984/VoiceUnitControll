@@ -187,7 +187,7 @@ details ul{margin:6px 0 0;padding-left:18px}
       </label>
       <p class="hint" id="engineInfo"></p>
       <button class="btn" id="engineInstall" type="button" hidden>한국어 오프라인 음성 모델 내려받기</button>
-      <label><input type="checkbox" id="optWarm" checked> 말한 뒤 10초간 마이크를 켜 둬 다음 명령의 첫 단어가 잘리지 않게</label>
+      <p class="hint">누를 때마다 새 음성 입력을 시작합니다. 마이크 준비 신호음 뒤에 말하고, 키를 떼면 해당 명령만 확정합니다.</p>
       <label><input type="checkbox" id="optFast" checked> 말이 끝나기 전이라도 명령이 완성되면 바로 실행</label>
       <label><input type="checkbox" id="optFuzzy" checked> 부대 이름·명령어가 비슷하게 들려도 알아듣기</label>
       <label id="aiRow" hidden><input type="checkbox" id="optAI" checked> 규칙으로 못 알아들은 명령은 AI(Claude)가 해석</label>
@@ -257,7 +257,9 @@ const ACTION_LABEL = { move:'이동', attack:'공격', attackmove:'진격 (가�
 /* ================= 상태 ================= */
 const $ = s => document.querySelector(s);
 const cv = $('#map'), ctx = cv.getContext('2d');
-let units, buildings, squads, nextId, beams, pings, score, wave, waveTimer, undoStack;
+let units, buildings, squads, nextId, beams, pings, score, wave, waveTimer, undoStack, gameGen = 0;
+let commandSeq = 0, pendingAI = null;
+const AI_STATUS = 'AI가 명령을 해석하는 중…';
 let placing = null, placingKeep = false, drag = null;
 let cursorWorld = { x:800, y:500 };
 let view = { s:1, dpr:1 };
@@ -312,6 +314,10 @@ function placeBuilding(bt, x, y){
   buildings.push(b); return b;
 }
 function reset(){
+  gameGen++;   // 다시 시작 전에 보낸 AI 해석 결과는 버린다
+  // 말하던 명령과 아직 확정 안 된 인식 결과도 버린다. 안 그러면 다음에 누를 때 이전 말이 섞여 들어온다
+  if (utter){ utter.done = true; clearTimeout(utter.finalTimer); setPTT(false); }
+  utter = null; newCommandId(); resetRec();
   units = []; buildings = []; squads = []; nextId = 1; beams = []; pings = []; undoStack = [];
   score = { kills:0, losses:0 }; wave = 0; waveTimer = 60; placing = null;
   placeBuilding('hq', 130, 500);
@@ -658,7 +664,7 @@ function resolveBuildingRef(ref){
 }
 
 /* ================= 건설·생산 명령 ================= */
-const PRODUCE_VERB = /생산|뽑|훈련|양성/, BUILD_VERB = /건설|건축|지어|짓|세워|설치|올려/, MAKE_VERB = /만들/;
+const PRODUCE_VERB = /생산|뽑|훈련|양성|충원|보충/, BUILD_VERB = /건설|건축|지어|짓|세워|설치|올려/, MAKE_VERB = /만들|생성|추가/;   // MAKE: 유닛이면 생산, 건물이면 건설
 const UNIT_WORD_RE = new RegExp(Object.values(TYPE_RES).map(r => r.source).join('|'), 'g');
 const KNUM = { 한:1,하나:1,두:2,둘:2,세:3,셋:3,네:4,넷:4,다섯:5,여섯:6,일곱:7,여덟:8,아홉:9, 일:1,이:2,삼:3,사:4,오:5,육:6,칠:7,팔:8,구:9 };
 function korNum(w){
@@ -676,18 +682,25 @@ function countIn(s, units, needUnit){
 }
 function parseProduceItems(c){
   const ms = [...c.matchAll(UNIT_WORD_RE)];
+  let prevUsedAfter = false;
   return ms.map((m, i) => {
     const type = Object.keys(TYPE_RES).find(k => TYPE_RES[k].test(m[0]));
     const after = c.slice(m.index + m[0].length, i+1 < ms.length ? ms[i+1].index : undefined);
     const before = c.slice(i ? ms[i-1].index + ms[i-1][0].length : 0, m.index).match(/(\d+)\s*(?:개|명|기|마리|대)?\s*(?:의)?\s*$/);
-    const n = countIn(after, '개|명|기|마리|대', false) ?? (before ? Number(before[1]) : 1);
+    const a = countIn(after, '개|명|기|마리|대', false), usedBefore = before && !prevUsedAfter;
+    prevUsedAfter = a != null;
+    const n = a ?? (usedBefore ? Number(before[1]) : 1);
     return { type, count: Math.max(1, Math.min(50, n || 1)) };
   });
 }
 /* "병영1에서 해병 10명 생산", "병영을 B2에 건설해줘", "사령부 옆에 공장 2개 지어". 해당 없으면 null (부대 명령으로 넘어감) */
 function parseBuildOrProduce(c){
   const hasUnit = Object.values(TYPE_RES).some(re => re.test(c));
-  const produce = PRODUCE_VERB.test(c) || (MAKE_VERB.test(c) && hasUnit);
+  // 동사 없이 "병영1 해병 10마리", "해병 10마리"라고만 해도 생산 (동작어가 있으면 부대 명령)
+  // "해병 3명 저기로"처럼 목적지가 있으면 이동이라 제외
+  const bare = hasUnit && !parseAction(c) && ['building', undefined].includes((parseTarget(c) || {}).kind)
+    && (findBuildingRefs(c).length > 0 || /\d|마리|명|개|기(?![가-힣])/.test(c));
+  const produce = PRODUCE_VERB.test(c) || (MAKE_VERB.test(c) && hasUnit) || bare;
   if (!produce && !BUILD_VERB.test(c) && !MAKE_VERB.test(c)) return null;
   const refs = findBuildingRefs(c);
   if (produce) return { action:'produce', subject:null, items:parseProduceItems(c), bref:refs[0] || null, target:{ kind:'none' } };
@@ -702,10 +715,10 @@ function parseBuildOrProduce(c){
 }
 /* 구역(A1~H5) 인식: 음성 인식은 같은 소리를 "A1", "a 1", "에이원", "에이 1", "A원"처럼 제각각 적는다.
    알파벳 이름과 숫자(한자어·영어 발음)를 모두 받아 표준 표기 "A1"로 맞춘다. */
-const GRID_LETTERS = { A:['에이','애이','a'], B:['비','삐','b'], C:['씨','시','쒸','c'], D:['디','띠','d'],
-  E:['이','e'], F:['에프','애프','에푸','f'], G:['쥐','지','g'], H:['에이치','에이취','에치','에취','h'] };
+const GRID_LETTERS = { A:['에이','애이','헤이','해이','a'], B:['비','삐','b'], C:['씨','시','쒸','c'], D:['디','띠','d'],
+  E:['이','e'], F:['에프','애프','에푸','f'], G:['쥐','지','g'], H:['에이치','에이취','에이찌','헤이치','에치','에취','h'] };
 const GRID_NUMS = { 1:['1','일','원','완','one'], 2:['2','이','투','two'], 3:['3','삼','쓰리','스리','three'], 4:['4','사','포','four'], 5:['5','오','파이브','five'] };
-const GRID_TAIL = '(?:\\s*(?:구역|칸|지점)|으로|로|에서|에|쪽|까지)?';
+const GRID_TAIL = '(?:\\s*(?:구역|칸|지점|쪽|방향))?(?:으로|로|에서|에|까지)?';   // "에이원 쪽으로", "B2 구역에"
 function altOf(map){ const all = []; for (const [k,arr] of Object.entries(map)) arr.forEach(w => all.push([w,k])); all.sort((a,b) => b[0].length - a[0].length);
   return { re: all.map(x => x[0]).join('|'), look: Object.fromEntries(all.map(([w,k]) => [w.toLowerCase(), k])) }; }
 const GL = altOf(GRID_LETTERS), GN = altOf(GRID_NUMS);
@@ -730,11 +743,10 @@ const RESERVED = /^(전군|전체|전원|모두|전부|선택|알파|브라보|�
 
 function matchSquadsExact(text){
   const found = []; let rest = text;
-  const flat = nospace(text);
   for (const sq of [...squads].sort((a,b) => b.name.length - a.name.length)){
     const n = nospace(sq.name);
     if (rest.includes(sq.name)){ found.push(sq.id); rest = rest.split(sq.name).join(' '); }
-    else if (n.length >= 2 && flat.includes(n) && !found.includes(sq.id)){
+    else if (n.length >= 2 && nospace(rest).includes(n) && !found.includes(sq.id)){
       found.push(sq.id);
       const re = new RegExp(n.split('').map(ch => ch.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('\\s*'), 'g');
       rest = rest.replace(re, ' ');
@@ -768,8 +780,8 @@ function parseSubject(c){
   let rest = ex.rest;
   const ids = [...ex.found];
   // 2) 번호 부대
-  let m; GROUP_RE.lastIndex = 0;
-  while ((m = GROUP_RE.exec(rest))) { const n = NUM[m[1]]; const sq = squads.find(s => s.num === n); if (sq && !ids.includes(sq.id)) ids.push(sq.id); }
+  let m, missing = false; GROUP_RE.lastIndex = 0;
+  while ((m = GROUP_RE.exec(rest))) { const n = NUM[m[1]]; const sq = squads.find(s => s.num === n); if (!sq) missing = true; else if (!ids.includes(sq.id)) ids.push(sq.id); }
   rest = rest.replace(GROUP_RE, ' ');
   // 3) "2번", "이번"처럼 '부대' 없이 번호만 부른 경우
   //    음성 인식은 "2번"을 흔한 단어 "이번"으로 적는 일이 많아서, 절 맨 앞의 한글 숫자+번도 부대 번호로 본다
@@ -779,12 +791,14 @@ function parseSubject(c){
     const t = rest.trim();
     let mm = t.match(NUMBAN_HEAD);
     if (mm){ const n = NUM[mm[1]]; const sq = squads.find(s => s.num === n);
-      if (sq){ if (!ids.includes(sq.id)) ids.push(sq.id); rest = t.slice(mm[0].length); changed = true; continue; } }
+      if (sq){ if (!ids.includes(sq.id)) ids.push(sq.id); rest = t.slice(mm[0].length); changed = true; continue; }
+      missing = true; rest = t.slice(mm[0].length); changed = true; continue; }
     mm = rest.match(NUMBAN_DIGIT);
     if (mm){ const sq = squads.find(s => s.num === Number(mm[1]));
-      if (sq){ if (!ids.includes(sq.id)) ids.push(sq.id); rest = rest.replace(mm[0], ' '); changed = true; } }
+      if (sq){ if (!ids.includes(sq.id)) ids.push(sq.id); rest = rest.replace(mm[0], ' '); changed = true; }
+      else { missing = true; rest = rest.replace(mm[0], ' '); } }
   }
-  if (ids.length) return { subject:{ kind:'squad', ids }, rest };
+  if (ids.length || missing) return { subject:{ kind:'squad', ids }, rest };
   const types = Object.keys(TYPE_RES).filter(k => TYPE_RES[k].test(rest));
   if (types.length){ types.forEach(k => rest = rest.replace(TYPE_RES[k], ' ')); return { subject:{ kind:'type', types }, rest }; }
   if (ALL_RE.test(rest)) return { subject:{ kind:'all' }, rest: rest.replace(ALL_RE,' ') };
@@ -845,12 +859,16 @@ function parseText(text){
   }
   return { cmds, unparsed };
 }
-const sigOf = cmds => JSON.stringify(cmds.map(c => [c.subject && {k:c.subject.kind, i:c.subject.ids, t:c.subject.types}, c.action, c.target]));
+const sigOf = (cmds, cur) => JSON.stringify([cmds.map(c => [c.subject && {k:c.subject.kind, i:c.subject.ids, t:c.subject.types}, c.action, c.target]),
+  cmds.some(usesCursor) ? cur : 0]);   // 커서로 목적지를 정하는 명령은 커서가 움직이면 다른 명령
+// "저기로 이동"처럼 커서를 부르거나, "이동"처럼 목적지를 생략해 커서 위치로 가는 명령 (resolveTarget의 default와 맞춘다)
+const usesCursor = c => c.target.kind==='cursor' || (c.target.kind==='none' && ['attackmove','move','patrol'].includes(c.action));
 
 /* ================= 명령 실행 ================= */
 function resolveUnits(subject){
   const mine = alive('P'), sel = mine.filter(u => u.sel);
   if (!subject || subject.kind==='selection') return sel.length ? sel : [];
+  if (subject.kind==='units') return mine.filter(u => subject.ids.includes(u.id));
   if (subject.kind==='squad') return mine.filter(u => subject.ids.includes(u.squad));
   if (subject.kind==='type')  return mine.filter(u => subject.types.includes(u.type));
   return mine;
@@ -894,6 +912,7 @@ function resolveTarget(target, action, us, cursor){
 function subjectLabel(subject, us){
   const n = ` (${us.length}기)`;
   if (!subject || subject.kind==='selection') return '선택한 유닛' + n;
+  if (subject.kind==='units') return subject.label + n;
   if (subject.kind==='squad'){
     const names = subject.ids.map(id => (squadById(id)||{}).name).filter(Boolean).join(', ');
     return names + n + (subject.fuzzy ? ` — "${subject.fuzzy}"를 비슷한 발음으로 인식` : '');
@@ -906,8 +925,38 @@ function formationOffsets(n, gap){
   for (let i=0;i<n;i++){ const c=i%cols, r=Math.floor(i/cols); out.push({ x:(c-(cols-1)/2)*gap, y:(r-(rows-1)/2)*gap }); }
   return out;
 }
-function snapshot(){ return alive('P').map(u => ({ id:u.id, order:{...u.order} })); }
-function restore(snap){ for (const s of snap){ const u = units.find(v => v.id===s.id && v.hp>0); if (u) u.order = {...s.order}; } }
+// 새 입력은 이전 AI 요청보다 우선한다. 취소할 수 없는 요청도 응답 적용은 막는다.
+function newCommandId(){
+  commandSeq++;
+  if (pendingAI){
+    pendingAI = null;
+    if ($('#voiceStatus').textContent === AI_STATUS) setStatus('');
+  }
+  return commandSeq;
+}
+function saveOrder(tx, u){
+  if (!tx.before.some(s => s.id === u.id)) tx.before.push({ id:u.id, order:{...u.order}, version:u.commandVersion || 0 });
+  u.commandVersion = tx.id;
+}
+function rollbackOrder(tx){
+  if (!tx || tx.gen !== gameGen) return;
+  for (const s of tx.before){
+    const u = units.find(v => v.id === s.id && v.hp > 0);
+    // 이후 마우스나 다른 발화가 명령한 유닛은 건드리지 않는다.
+    if (u && u.commandVersion === tx.id){ u.order = {...s.order}; u.commandVersion = s.version; }
+    // 이후 명령을 취소하더라도 폐기된 중간 음성 명령이 되살아나지 않게 한다.
+    for (const later of undoStack){
+      if (later === tx) continue;
+      for (const prev of later.before) if (prev.id === s.id && prev.version === tx.id){ prev.order = {...s.order}; prev.version = s.version; }
+    }
+  }
+  const index = undoStack.indexOf(tx);
+  if (index !== -1) undoStack.splice(index, 1);
+}
+function discardEarly(u){
+  rollbackOrder(u.earlyTransaction);
+  u.earlyTransaction = null; u.earlySig = null; u.earlyResults = null;
+}
 
 /* p에서 가까운 순으로 원을 넓혀 가며 지을 수 있는 자리를 찾는다 */
 function findSpot(bt, p){
@@ -960,34 +1009,46 @@ function execProduce(cmd){
   });
 }
 
-function execute(cmds, cursor, quiet){
-  const results = [], snap = snapshot(); let changed = false;
+function execute(cmds, cursor, quiet, commandId){
+  const id = commandId ?? newCommandId(), results = [];
+  let tx = { id, gen:gameGen, before:[] };
+  const commit = () => { if (tx.before.length){ undoStack.push(tx); if (undoStack.length > 20) undoStack.shift(); } };
   for (const cmd of cmds){
     if (cmd.action==='build'){ results.push(execBuild(cmd, cursor)); continue; }
     if (cmd.action==='produce'){ results.push(...execProduce(cmd)); continue; }
     if (cmd.action==='undo'){
-      const prev = undoStack.pop();
-      if (prev){ restore(prev); results.push({ ok:true, who:'직전 명령을 받은 유닛', what:ACTION_LABEL.undo, where:'–' }); }
+      commit();
+      const prev = undoStack.at(-1);
+      if (prev && prev.id > id){
+        results.push({ ok:false, who:'–', what:ACTION_LABEL.undo, where:'–', msg:'더 최근 명령이 있어 이전 음성의 취소를 적용하지 않았습니다' });
+      } else if (prev){
+        undoStack.pop();
+        for (const s of prev.before){ const u = units.find(v => v.id === s.id && v.hp > 0); if (u){ u.order = {...s.order}; u.commandVersion = id; } }
+        results.push({ ok:true, who:'직전 명령을 받은 유닛', what:ACTION_LABEL.undo, where:'–' });
+      }
       else results.push({ ok:false, who:'–', what:ACTION_LABEL.undo, where:'–', msg:'되돌릴 명령이 없습니다' });
+      tx = { id, gen:gameGen, before:[] };
       continue;
     }
-    const us = resolveUnits(cmd.subject);
+    const resolved = resolveUnits(cmd.subject), us = resolved.filter(u => (u.commandVersion || 0) <= id);
     const who = subjectLabel(cmd.subject, us), what = ACTION_LABEL[cmd.action] + (cmd.fuzzyAction ? ` — "${cmd.fuzzyAction}"를 비슷한 발음으로 인식` : '');
+    if (resolved.length && !us.length){ results.push({ ok:false, who, what, where:'–', msg:'더 최근 명령을 받은 유닛이므로 이전 음성 명령을 적용하지 않았습니다' }); continue; }
     if (!us.length){ results.push({ ok:false, who, what, where:'–', msg: (!cmd.subject || cmd.subject.kind==='selection') ? '누구에게 내린 명령인지 모르겠습니다. 부대 이름을 넣어 말하거나 유닛을 먼저 선택하세요' : '해당하는 유닛이 없습니다' }); continue; }
     if (cmd.action==='stop' || cmd.action==='hold'){
-      us.forEach(u => { u.order = { kind: cmd.action==='stop' ? 'idle' : 'hold' }; u.flash = 0.6; });
-      results.push({ ok:true, who, what, where:'제자리' }); changed = true; continue;
+      us.forEach(u => { saveOrder(tx, u); u.order = { kind: cmd.action==='stop' ? 'idle' : 'hold' }; u.flash = 0.6; });
+      results.push({ ok:true, who, what, where:'제자리' }); continue;
     }
     const tg = resolveTarget(cmd.target, cmd.action, us, cursor);
     if (tg.error){ results.push({ ok:false, who, what, where:'–', msg:tg.error }); continue; }
     if (tg.enemy && (cmd.action==='attack' || cmd.action==='attackmove')){
-      us.forEach(u => { u.order = { kind:'attack', targetId:tg.enemy.id }; u.flash = 0.6; });
+      us.forEach(u => { saveOrder(tx, u); u.order = { kind:'attack', targetId:tg.enemy.id }; u.flash = 0.6; });
       pings.push({ x:tg.enemy.x, y:tg.enemy.y, life:0.7, max:0.7, kind:'attack' });
     } else {
       const p = tg.point || (tg.enemy ? { x:tg.enemy.x, y:tg.enemy.y } : centroid(us));
       const kind = cmd.action==='attack' ? 'attackmove' : cmd.action;
       const offs = formationOffsets(us.length, 26);
       us.forEach((u,i) => {
+        saveOrder(tx, u);
         const x = Math.max(12, Math.min(W-12, p.x+offs[i].x)), y = Math.max(12, Math.min(H-12, p.y+offs[i].y));
         u.order = kind==='patrol' ? { kind, x, y, bx:u.x, by:u.y } : { kind, x, y };
         u.flash = 0.6;
@@ -995,9 +1056,9 @@ function execute(cmds, cursor, quiet){
       pings.push({ x:p.x, y:p.y, life:0.7, max:0.7, kind: kind==='attackmove' ? 'attack' : 'move' });
       if (cmd.target && cmd.target.kind==='grid') pings.push({ cell:cmd.target.cell, x:p.x, y:p.y, life:1.4, max:1.4, kind:'cell' });
     }
-    results.push({ ok:true, who, what, where:tg.label }); changed = true;
+    results.push({ ok:true, who, what, where:tg.label });
   }
-  if (changed){ undoStack.push(snap); if (undoStack.length > 20) undoStack.shift(); }
+  commit(); results.transaction = tx.before.length ? tx : null;
   if (!quiet) beep(results.some(r => r.ok));
   return results;
 }
@@ -1190,14 +1251,20 @@ ${cands.length > 1
   ? '플레이어 명령 (음성 인식 후보, 앞쪽일수록 가능성이 높다. 명령으로 가장 말이 되는 것을 골라 해석하라):\n' + cands.map((c,i) => `${i+1}) "${c.replace(/"/g,"'")}"`).join('\n')
   : `플레이어 명령: "${cands[0].replace(/"/g,"'")}"`}`;
 }
-function validateAI(out){
+function validateAI(out, subjects){
   const ok = [], A = ['move','attack','attackmove','hold','stop','retreat','patrol'];
   for (const c of (out && Array.isArray(out.commands) ? out.commands : [])){
     if (!c || !A.includes(c.action)) continue;
     let s = c.subject || { kind:'selection' };
-    if (s.kind==='squad'){ const ids = (Array.isArray(s.names)?s.names:[]).map(n => (squads.find(q => q.name===String(n))||{}).id).filter(Boolean); s = { kind:'squad', ids }; if (!ids.length) continue; }
+    if (s.kind==='squad'){ const ids = (Array.isArray(s.names)?s.names:[]).map(n => ((subjects?.squads || squads).find(q => q.name===String(n))||{}).id).filter(Boolean); s = { kind:'squad', ids }; if (!ids.length) continue; }
     else if (s.kind==='type'){ const types = (Array.isArray(s.types)?s.types:[]).filter(t => TYPES[t] && TYPES[t].side==='P'); if (!types.length) continue; s = { kind:'type', types }; }
     else if (s.kind!=='all') s = { kind:'selection' };
+    if (subjects){
+      const ids = subjects.units.filter(u => s.kind==='all' || (s.kind==='selection' && u.sel) || (s.kind==='squad' && s.ids.includes(u.squad)) || (s.kind==='type' && s.types.includes(u.type))).map(u => u.id);
+      const label = s.kind==='squad' ? subjects.squads.filter(q => s.ids.includes(q.id)).map(q => q.name).join(', ')
+        : s.kind==='type' ? s.types.map(t => TYPES[t].name).join(', ') : s.kind==='all' ? '전군' : '선택한 유닛';
+      s = { kind:'units', ids, label };
+    }
     let t = c.target || { kind:'none' };
     if (t.kind==='waypoint' && !WAYPOINTS[t.name]) t = { kind:'none' };
     if (t.kind==='grid' && !/^[A-H][1-5]$/.test(String(t.cell||''))) t = { kind:'none' };
@@ -1223,7 +1290,6 @@ function parseScore(p){
   }
   return sc - p.unparsed.length * 1.5;
 }
-let busyAI = false;
 async function handleText(cands, meta){
   const t0 = performance.now();
   let parsed = null, used = cands[0];
@@ -1233,21 +1299,31 @@ async function handleText(cands, meta){
   const t1 = performance.now();
   const src = meta.source==='voice' ? '음성' : '텍스트';
   if (parsed){
-    if (meta.earlySig && meta.earlySig === sigOf(parsed.cmds)){ addLog(used, `${src}, 규칙 해석기`, true, null, '말하는 중 이미 실행됨'); return; }
-    if (meta.earlySnap){ restore(meta.earlySnap); undoStack.pop(); }
-    const res = execute(parsed.cmds, meta.cursor); const t2 = performance.now();
+    if (meta.earlySig && meta.earlySig === sigOf(parsed.cmds, meta.cursor) && meta.earlyResults?.some(r => r.ok)){
+      showParsed(used, meta.earlyResults, '규칙 해석기 (말하는 중 실행)', parsed.unparsed);
+      addLog(used, `${src}, 규칙 해석기`, true, null, '말하는 중 이미 실행됨'); return;
+    }
+    rollbackOrder(meta.earlyTransaction);
+    const res = execute(parsed.cmds, meta.cursor, false, meta.commandId); const t2 = performance.now();
     showParsed(used, res, '규칙 해석기 (빠른 경로)', parsed.unparsed);
     recordLatency({ stt:meta.stt, parse:t1-t0, apply:t2-t1, path:'규칙' });
     addLog(used, `${src}, 규칙 해석기`, res.some(r=>r.ok), (meta.stt||0) + (t2-t0));
     return;
   }
-  if (aiEnabled() && !busyAI){
-    busyAI = true; setStatus('AI가 명령을 해석하는 중…');
+  rollbackOrder(meta.earlyTransaction);
+  if (aiEnabled()){
+    // 오래된 발화의 최종 결과가 새 입력의 AI 요청을 취소하지 않게 한다.
+    if (meta.commandId != null && meta.commandId < commandSeq) return;
+    const request = { gen:gameGen, id:newCommandId() };
+    pendingAI = request; setStatus(AI_STATUS);
+    // 해석 중 선택이나 부대 편성이 바뀌어도 요청 당시 대상을 사용한다.
+    const subjects = { units:alive('P').map(u => ({ id:u.id, type:u.type, squad:u.squad, sel:u.sel })), squads:squads.map(s => ({...s})) };
     try{
       const out = await sample.json(buildPrompt(cands, meta.cursor), { modelTier:'quick' });
-      const t2 = performance.now(), cmds = validateAI(out);
+      if (pendingAI !== request || request.gen !== gameGen || request.id !== commandSeq) return;
+      const t2 = performance.now(), cmds = validateAI(out, subjects);
       if (cmds.length){
-        const res = execute(cmds, meta.cursor); const t3 = performance.now();
+        const res = execute(cmds, meta.cursor, false, request.id); const t3 = performance.now();
         showParsed(used, res, 'AI 해석기 (Claude, 느린 경로)', null, out && out.say);
         recordLatency({ stt:meta.stt, parse:t2-t0, apply:t3-t2, path:'AI' });
         addLog(used, `${src}, AI 해석기`, res.some(r=>r.ok), (meta.stt||0) + (t3-t0));
@@ -1255,14 +1331,15 @@ async function handleText(cands, meta){
         beep(false); showParsed(used, [], 'AI 해석기 (Claude)', null, (out && out.say) || '명령으로 해석하지 못했습니다');
         addLog(used, `${src}, AI 해석기`, false, null, '명령 아님');
       }
-      setStatus('');
+      if ($('#voiceStatus').textContent === AI_STATUS) setStatus('');
     } catch(e){
+      if (pendingAI !== request || request.gen !== gameGen || request.id !== commandSeq) return;
       beep(false);
       const code = e && e.code;
       if (['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed'].includes(code)){ sample = null; $('#aiRow').hidden = true; }
       setStatus(AI_ERR[code] || 'AI 해석에 실패했습니다. 다시 말해 보세요', true);
       addLog(used, `${src}, AI 해석기`, false, null, '실패');
-    } finally { busyAI = false; }
+    } finally { if (pendingAI === request) pendingAI = null; }
     return;
   }
   beep(false);
@@ -1283,13 +1360,11 @@ if (SR && BAD_SR_BROWSER) setStatus(`${BAD_SR_BROWSER}에서는 음성 인식 �
 else if (!SR) setStatus('이 브라우저는 음성 인식을 지원하지 않습니다. Chrome이나 Edge에서 열거나 텍스트 명령창을 쓰세요.', true);
 else if (location.protocol === 'file:') setStatus('파일을 직접 열면 음성 인식 서버 연결이 실패하고 마이크 권한도 매번 다시 묻습니다. 같은 폴더의 실행.bat으로 여세요.', true);
 
-/* 인식기를 누를 때마다 새로 켜면 실제 녹음이 시작되기까지 수백 ms가 걸려 첫 단어(대개 부대 이름)가 잘린다.
-   그래서 한 번 켠 인식기는 마지막 발화 뒤 WARM_MS 동안 켜 둔 채 기다리고, 누르고 있던 구간의 결과만 쓴다.
-   키를 뗀 뒤에도 TAIL_MS 동안 더 들어서 마지막 음절이 잘리지 않게 한다. */
-const TAIL_MS = 300, WARM_MS = 10000, FINAL_TIMEOUT_MS = 3000;
-let recState = 'off', recFatal = false, warmUntil = 0, warmTimer = null, sess = [], warmOffByNet = false;
-const firstOpen = () => { const i = sess.findIndex(r => !r.final); return i < 0 ? sess.length : i; };
-const uttResults = u => u.prev.concat(sess.slice(u.base));
+/* 인식 결과에는 PTT 구간을 나눌 타임스탬프가 없다. 누를 때마다 인식기를 분리하고
+   결과는 해당 발화만 소유한다. 키를 떼면 녹음을 멈추고 남은 결과의 확정만 기다린다. */
+const FINAL_TIMEOUT_MS = 3000;
+let recState = 'off', recFatal = false;
+const uttResults = u => u.prev.concat(u.results);
 /* 인식 엔진: Chrome은 한국어를 기기 안에서(오프라인) 인식할 수 있다. 서버 연결 실패가 없고, 부대·건물 이름을 우선 알아듣도록 힌트(phrases)를 줄 수 있다.
    기기 안 모델이 없으면 한 번 내려받아야 하고, 그 전까지는 Google 서버로 인식한다. */
 let localSR = 'unavailable';   // available | downloadable | downloading | unavailable
@@ -1322,7 +1397,7 @@ function updateEngineUI(){
 }
 function resetRec(){
   if (rec){ const r = rec; rec = null; try{ r.abort(); }catch(e){} }
-  recState = 'off'; sess = [];
+  recState = 'off'; recFatal = false;
   updateEngineUI();
 }
 // 음성 인식 힌트: 지금 있는 부대·건물 이름은 강하게, 명령어는 약하게
@@ -1330,13 +1405,14 @@ function buildPhrases(){
   const P = (w, b) => new SpeechRecognitionPhrase(w, b);
   const words = ['공격','이동','후퇴','진격','홀드','정지','순찰','취소','집결','건설','생산',
     '알파','브라보','찰리','델타','해병','화염병','의무병','바이크','전차','전투기','폭격기','병영','군수공장','우주공항','사령부','전군'];
-  return [...squads.map(s => P(s.name, 6)), ...buildings.map(b => P(b.name, 4)), ...words.map(w => P(w, 2))];
+  const cells = [...'ABCDEFGH'].flatMap(L => [1,2,3,4,5].map(n => L + n));   // 구역도 힌트로 줘서 "에이원" 대신 "A1"로 적게 한다
+  return [...squads.map(s => P(s.name, 6)), ...buildings.map(b => P(b.name, 4)), ...cells.map(c => P(c, 3)), ...words.map(w => P(w, 2))];
 }
 function recStart(){
-  if (recState !== 'off') return;
+  if (!rec || recState !== 'off') return;
   if (rec.processLocally && canPhrases && !rec.noPhrases){ try{ rec.phrases = buildPhrases(); }catch(e){ rec.noPhrases = true; } }
   try{ rec.start(); recState = 'starting'; }
-  catch(e){ setStatus('음성 인식을 시작하지 못했습니다.', true); }
+  catch(e){ setStatus('음성 인식을 시작하지 못했습니다. 다시 눌러 말하세요.', true); if (utter) finalize(utter); }
 }
 function recStop(){
   if (recState !== 'starting' && recState !== 'on') return;
@@ -1344,35 +1420,34 @@ function recStop(){
   try{ rec.stop(); }catch(e){}
 }
 function ensureRec(){
-  if (rec) return;
+  if (rec || !utter || utter.done) return;
+  const owner = utter;
+  const current = () => r === rec && owner === utter && !owner.done;
   const r = new SR(); rec = r;
   r.lang = 'ko-KR'; r.interimResults = true; r.continuous = true; r.maxAlternatives = 3;
   if (useLocal()) r.processLocally = true;
   r.onaudiostart = () => {
-    if (r !== rec) return;
+    if (!current()) return;
     if (recState === 'starting') recState = 'on';
-    const u = utter;
+    const u = owner;
     if (u && !u.done && !u.tRelease){ setStatus('듣는 중'); try{ tone(880, actx.currentTime, 0.05); }catch(e){} }
   };
   r.onresult = ev => {
-    if (r !== rec) return;
-    sess = Array.from(ev.results).map(x => ({ final:x.isFinal, alts:Array.from(x).map(a => a.transcript) }));
-    const u = utter;
-    if (u && !u.done) onUtterResults(u);
+    if (!current()) return;
+    owner.results = Array.from(ev.results).map(x => ({ final:x.isFinal, alts:Array.from(x).map(a => a.transcript) }));
+    onUtterResults(owner);
   };
   r.onerror = ev => {
-    if (r !== rec) return;
+    if (!current()) return;
     if (ev.error === 'phrases-not-supported'){ r.noPhrases = true; return; }
     // 기기 안 모델이 사라졌으면 서버로 되돌린다
-    if (ev.error === 'language-not-supported' && r.processLocally){ localSR = 'unavailable'; checkLocal(); rec = null; recState = 'off'; recFatal = true; }
+    if (ev.error === 'language-not-supported' && r.processLocally){ localSR = 'unavailable'; updateEngineUI(); recFatal = true; }
     // 이 오류들은 곧바로 다시 켜도 또 실패한다. 자동 재시작을 멈추고 다음에 누를 때 다시 시도한다
     if (['not-allowed','service-not-allowed','audio-capture','network'].includes(ev.error)) recFatal = true;
-    if (ev.error === 'network' && $('#optWarm').checked){ $('#optWarm').checked = false; warmOffByNet = true; }
-    const u = utter;
-    if (!u || u.done || ev.error === 'aborted') return;   // 기다리는 동안(예열 중) 난 오류는 조용히 넘긴다
+    if (ev.error === 'aborted') return;
     const net = '음성 인식 서버에 연결하지 못했습니다. ' + (location.protocol === 'file:' ? '파일을 직접 열어서 생기는 문제입니다. 같은 폴더의 실행.bat으로 여세요.' : BAD_SR_BROWSER ? `${BAD_SR_BROWSER}에서는 음성 인식 서버를 쓸 수 없습니다. Chrome이나 Edge로 여세요.`
       : localSR === 'downloadable' ? '설정의 "한국어 오프라인 음성 모델 내려받기"를 누르면 서버 없이 인식합니다.'
-      : 'VPN·회사 방화벽·인터넷 연결을 확인하고 다시 눌러 보세요.') + (warmOffByNet ? ' (마이크 예열은 자동으로 껐습니다)' : '');
+      : 'VPN·회사 방화벽·인터넷 연결을 확인하고 다시 눌러 보세요.');
     const map = { 'not-allowed':'마이크 권한이 막혀 있습니다. 이 화면에서 마이크를 쓸 수 없다면 파일을 받아 Chrome에서 직접 열어 보세요. 텍스트 명령창은 그대로 동작합니다.',
       'service-not-allowed':'이 환경에서는 음성 인식 서비스를 쓸 수 없습니다. 텍스트 명령창을 쓰세요.',
       'no-speech':'말소리가 들리지 않았습니다.', 'audio-capture':'마이크를 찾을 수 없습니다.', 'network':net,
@@ -1380,21 +1455,16 @@ function ensureRec(){
     setStatus(map[ev.error] || ('음성 인식 오류: ' + ev.error), ev.error !== 'no-speech');
   };
   r.onend = () => {
-    if (r !== rec && rec !== null) return;
-    recState = 'off';
-    const u = utter;
-    if (u && !u.done){ u.prev = uttResults(u); u.base = 0; }
-    sess = [];
-    if (!rec) ensureRec();   // 엔진을 바꾸는 중이었다
-    if (u && !u.done){
-      if (u.tRelease || recFatal){ finalize(u); setPTT(false); }
-      else recStart();   // 누르고 있는 동안 브라우저가 세션을 끊으면 이어서 듣는다
-    }
-    if ((!utter || utter.done) && !recFatal && performance.now() < warmUntil) recStart();
+    if (!current()) return;
+    recState = 'off'; rec = null;
+    if (owner.tRelease != null || recFatal){ finalize(owner); return; }
+    owner.prev = uttResults(owner); owner.results = [];
+    ensureRec(); recStart();   // 누르는 도중 세션이 끝나면 같은 발화 안에서만 이어 듣는다.
   };
 }
 
 function onUtterResults(my){
+  if (my.done || my !== utter) return;
   const results = uttResults(my);
   const text = results.map(r => r.alts[0]).join(' ').trim();
   setTranscript(text || '…', !text);
@@ -1404,64 +1474,57 @@ function onUtterResults(my){
   if ($('#optFast').checked && text){
     const p = parseText(text);
     if (p.cmds.length && !p.cmds.some(c => ['undo','build','produce'].includes(c.action))){   // 되돌릴 수 없는 명령은 말이 끝난 뒤에만
-      const sig = sigOf(p.cmds);
+      const cur = pickCursor(my), sig = sigOf(p.cmds, cur);
       if (sig !== my.earlySig){
         const t0 = performance.now();
-        if (my.earlySnap){ restore(my.earlySnap); undoStack.pop(); }
-        my.earlySnap = snapshot();
-        const res = execute(p.cmds, my.tRelease ? pickCursor(my) : {...cursorWorld});
+        discardEarly(my);
+        const res = execute(p.cmds, cur, false, my.commandId);
         const t1 = performance.now();
         my.earlySig = sig;
+        my.earlyTransaction = res.transaction; my.earlyResults = res;
         showParsed(text, res, '규칙 해석기 (말하는 중 실행)', p.unparsed);
         recordLatency({ stt:null, early:true, parse:t1-t0, apply:0.1, path:'규칙, 말하는 중' });
       }
-    }
-  }
+    } else discardEarly(my);
+  } else if (!text) discardEarly(my);
   if (my.stopped && results.length && results.every(r => r.final)) finalize(my);
 }
 
 function startPTT(){
   if (!SR){ beep(false); return; }
-  if (utter && !utter.done){ if (!utter.tRelease) return; finalize(utter); }   // 직전 발화가 확정 전이면 있는 그대로 처리
+  if (utter && !utter.done){ if (utter.tRelease == null) return; finalize(utter); }   // 새 입력 전에 직전 발화의 결과를 고정한다.
   try{ actx = actx || new (window.AudioContext||window.webkitAudioContext)(); }catch(e){}
-  ensureRec(); recFatal = false; clearTimeout(warmTimer);
-  // 누르기 직전에 이미 말하기 시작해 아직 확정 안 된 결과가 있으면 그것도 이번 발화에 포함한다
-  utter = { id:++uttSeq, cursorStart:{...cursorWorld}, tRelease:null, base:firstOpen(), prev:[], stopped:false, done:false, earlySig:null, earlySnap:null };
+  resetRec();
+  utter = { id:++uttSeq, commandId:newCommandId(), cursorStart:{...cursorWorld}, tRelease:null, prev:[], results:[], finalTimer:null, stopped:false, done:false, earlySig:null, earlyTransaction:null, earlyResults:null };
+  ensureRec();
   setPTT(true); setTranscript('…', true);
-  if (recState === 'on') setStatus('듣는 중');
-  else { setStatus('마이크 준비 중… 신호음이 나면 말하세요'); recStart(); }
+  setStatus('마이크 준비 중… 신호음이 나면 말하세요'); recStart();
 }
 function stopPTT(){
   const u = utter;
-  if (!u || u.tRelease) return;
+  if (!u || u.done || u.tRelease != null) return;
   u.tRelease = performance.now(); u.cursorEnd = {...cursorWorld};
   setPTT(false);
-  const warm = $('#optWarm').checked ? WARM_MS : 0;
-  warmUntil = u.tRelease + warm;
-  clearTimeout(warmTimer);
-  warmTimer = setTimeout(() => { if (!utter || utter.done) recStop(); }, Math.max(warm, TAIL_MS + 50));
-  setTimeout(() => {
-    if (u.done) return;
-    u.stopped = true;
-    const rs = uttResults(u);
-    if (rs.length && rs.every(r => r.final)) finalize(u);   // 이미 확정됐으면 인식기는 켜 둔 채 바로 처리
-    else if (recState === 'off') finalize(u);
-    else recStop();   // 멈추면 브라우저가 남은 결과를 바로 확정하고, onend에서 처리한 뒤 다시 켠다
-  }, TAIL_MS);
-  setTimeout(() => finalize(u), TAIL_MS + FINAL_TIMEOUT_MS);   // onend가 끝내 안 오는 경우 대비
+  u.stopped = true;
+  u.finalTimer = setTimeout(() => { if (utter === u) finalize(u); }, FINAL_TIMEOUT_MS);
+  recStop();
+  const rs = uttResults(u);
+  if (recState === 'off' || (rs.length && rs.every(r => r.final))) finalize(u);
 }
 function pickCursor(u){ return $('#optCursor').value === 'start' ? u.cursorStart : (u.cursorEnd || {...cursorWorld}); }
 function finalize(u){
-  if (u.done) return; u.done = true;
+  if (u.done || u !== utter) return; u.done = true;
+  clearTimeout(u.finalTimer); u.finalTimer = null;
+  resetRec(); setPTT(false);
   const tFinal = performance.now();
   clearPending();
   const results = uttResults(u);
-  if (!results.length){ if (!$('#voiceStatus').classList.contains('err')) setStatus('인식된 말이 없습니다.'); setTranscript('부대 이름을 부르며 명령하세요', true); return; }
+  if (!results.length){ discardEarly(u); if (!$('#voiceStatus').classList.contains('err')) setStatus('인식된 말이 없습니다.'); setTranscript('부대 이름을 부르며 명령하세요', true); return; }
   const cands = [];
   for (let k=0;k<3;k++){ const s = results.map(r => r.alts[k] != null ? r.alts[k] : r.alts[0]).join(' ').trim(); if (s && !cands.includes(s)) cands.push(s); }
-  if (!cands.length) return;
+  if (!cands.length){ discardEarly(u); return; }
   setTranscript(cands[0]); if (!$('#voiceStatus').classList.contains('err')) setStatus('');
-  handleText(cands, { source:'voice', stt: u.tRelease ? Math.max(0, tFinal - u.tRelease) : null, cursor:pickCursor(u), earlySig:u.earlySig, earlySnap:u.earlySnap });
+  handleText(cands, { source:'voice', stt: u.tRelease ? Math.max(0, tFinal - u.tRelease) : null, cursor:pickCursor(u), commandId:u.commandId, earlySig:u.earlySig, earlyTransaction:u.earlyTransaction, earlyResults:u.earlyResults });
 }
 function setPTT(on){ const b = $('#ptt'); b.classList.toggle('live', on); b.firstChild.textContent = on ? '듣는 중… 떼면 실행' : '누르고 말하기'; }
 
